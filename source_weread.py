@@ -9,12 +9,13 @@ import requests
 from typing import List, Optional, Dict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from . import proxy_manager
 from .book_record import BookRecord, canonical_isbn
 
 # ============================================================
 # 配置
 # ============================================================
-WEREAD_TIMEOUT = 12  # 查询超时（秒）
+WEREAD_TIMEOUT = 8   # 查询超时（秒）
 WEREAD_MAX_RESULTS = 10  # 最多返回条数
 WEREAD_DETAIL_WORKERS = 3  # 并行获取详情的线程数
 WEREAD_DETAIL_LIMIT = 5  # 最多获取多少本书的详情
@@ -33,13 +34,9 @@ WEREAD_HEADERS = {
     "Content-Type": "application/json",
 }
 
-# 代理：从环境变量读取
-_WEREAD_PROXIES = None
-if os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY"):
-    _WEREAD_PROXIES = {
-        "http": os.environ.get("HTTP_PROXY", ""),
-        "https": os.environ.get("HTTPS_PROXY", os.environ.get("HTTP_PROXY", "")),
-    }
+# 代理：由 proxy_manager 动态获取
+def _get_proxies():
+    return proxy_manager.get_proxies()
 
 
 class WeReadSource:
@@ -107,7 +104,8 @@ class WeReadSource:
                 json=body,
                 headers=self._get_auth_headers(),
                 timeout=WEREAD_TIMEOUT,
-                proxies=_WEREAD_PROXIES,
+                proxies=_get_proxies(),
+                verify=False,
             )
             if resp.status_code == 200:
                 return resp.json()
@@ -118,7 +116,8 @@ class WeReadSource:
                     json=body,
                     headers=self._get_auth_headers(),
                     timeout=WEREAD_TIMEOUT,
-                    proxies=_WEREAD_PROXIES,
+                    proxies=_get_proxies(),
+                    verify=False,
                 )
                 if resp.status_code == 200:
                     return resp.json()
@@ -233,5 +232,4 @@ class WeReadSource:
 
     def _get_book_detail(self, book_id: str) -> Optional[dict]:
         """获取单本书的详情"""
-        time.sleep(0.15)  # 友好限速
         return self._gateway_call("/book/info", {"bookId": book_id})

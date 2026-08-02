@@ -40,6 +40,7 @@ def _get_helper():
         helper = _helper
     return helper
 
+from . import proxy_manager
 from .book_record import BookRecord, MergedBook, canonical_isbn
 from .matcher import BookMatcher
 from .source_douban import DoubanSource
@@ -81,10 +82,10 @@ CASCADE_ENABLED = True       # 是否启用 ISBN 级联
 CASCADE_OPENLIBRARY = True   # 级联查询 OpenLibrary ISBN
 CASCADE_GOOGLE_BOOKS = True  # 级联查询 Google Books（需网络可达）
 GOOGLE_BOOKS_AS_SOURCE = True   # Google Books 是否作为常规源参与书名搜索
-CASCADE_TIMEOUT = 15         # ISBN 级联超时（比书名搜索稍长）
+CASCADE_TIMEOUT = 10         # ISBN 级联超时（比书名搜索稍长）
 
 # 最大并发源查询数
-SOURCE_TIMEOUT = 12  # 单源超时（秒）
+SOURCE_TIMEOUT = 8   # 单源超时（秒）
 
 # 封面代理（解决豆瓣防盗链）
 PROXY_DOUBAN_COVER = True
@@ -92,14 +93,10 @@ DOUBAN_COVER_PROXY_HOST = ""  # 空 = 自动使��当前 host
 DOUBAN_COVER_PROXY_PATH = "metadata/douban_cover?cover="
 DOUBAN_COVER_DOMAIN = "doubanio.com"
 
-# 代理设置：从环境变量读取，用于访问外网资源
-import os as _os
-_COVER_PROXIES = None
-if _os.environ.get("HTTPS_PROXY") or _os.environ.get("HTTP_PROXY"):
-    _COVER_PROXIES = {
-        "http": _os.environ.get("HTTP_PROXY", ""),
-        "https": _os.environ.get("HTTPS_PROXY", _os.environ.get("HTTP_PROXY", "")),
-    }
+# 代理：由 proxy_manager 统一管理（自动检测主/备链路）
+_px = proxy_manager.get_proxies()
+_COVER_PROXIES = {"http": _px["http"], "https": _px["https"]} if _px else None
+_PROXY_INFO = proxy_manager.get_current_proxy_info()
 
 
 DEFAULT_HEADERS = {
@@ -173,6 +170,11 @@ class MultiSource(Metadata):
         # 判断是否为 ISBN 搜索
         is_isbn = self._is_isbn_query(query)
 
+        # ---- 代理预热：提前检测链路，缓存结果 ----
+        _proxies = proxy_manager.get_proxies()
+        _px_info = proxy_manager.get_current_proxy_info()
+        log.info(f"[MultiSource] 代理: {_px_info}")
+
         # ---- 阶段1: 并行查询所有源 ----
         log.info(f"[MultiSource] 阶段1: 搜索 '{query}' (is_isbn={is_isbn})")
         all_records = self._query_all_sources(query, is_isbn)
@@ -236,7 +238,24 @@ class MultiSource(Metadata):
 
     @staticmethod
     def _query_source(source, query: str, is_isbn: bool) -> List[BookRecord]:
-        return source.search(query, is_isbn)
+        """查询单个源，超时/连接类错误自动重试一次"""
+        for attempt in range(2):
+            try:
+                return source.search(query, is_isbn)
+            except Exception as e:
+                err = str(e).lower()
+                transient = any(kw in err for kw in (
+                    "timeout", "timed out", "connection",
+                    "ssl", "reset", "refused", "eof",
+                ))
+                if attempt == 0 and transient:
+                    log.warning(
+                        f"[MultiSource] {source.SOURCE_NAME} 失败({e})，重试..."
+                    )
+                    time.sleep(1)
+                    continue
+                raise
+        return []
 
     @staticmethod
     def _extract_isbns(records: List[BookRecord]) -> List[str]:
@@ -318,24 +337,6 @@ class MultiSource(Metadata):
                 tags.append(book.language)
             if book.series:
                 tags.append(book.series)
-            # 添加字段来源标注
-            if book.field_sources:
-                source_tags = []
-                for field, src in book.field_sources.items():
-                    short = {"豆瓣": "DB", "国家图书馆": "NLC", "Open Library": "OL",
-                             "当当": "DD"}.get(src, src[:3])
-                    source_tags.append(f"{field}:{short}")
-                # 只取前几个关键字段
-                key_fields = ["title", "authors", "publisher", "isbn",
-                              "cover_url", "rating", "description", "clc_code"]
-                key_source_tags = []
-                for f in key_fields:
-                    if f in book.field_sources:
-                        src = book.field_sources[f]
-                        short = {"豆瓣": "DB", "国家图书馆": "NLC",
-                                 "Open Library": "OL", "当当": "DD"}.get(src, src[:3])
-                        key_source_tags.append(f"{f}={short}")
-                tags.extend(key_source_tags[:8])
 
             # 去重
             tags = self._dedup_tags(tags)
@@ -399,7 +400,8 @@ class MultiSource(Metadata):
                     else:
                         cover_url = url
                     resp = requests.get(cover_url, headers=DEFAULT_HEADERS,
-                                       proxies=_COVER_PROXIES, timeout=15)
+                                       proxies=_COVER_PROXIES or proxy_manager.get_proxies(),
+                                       timeout=15)
                     return h.save_cover(resp, book_path)
                 return save_cover(url, book_path)
 
@@ -441,7 +443,8 @@ try:
         if not cover_url:
             return Response("", status=400)
         resp = requests.get(cover_url, headers=DEFAULT_HEADERS,
-                           proxies=_COVER_PROXIES, timeout=15)
+                           proxies=_COVER_PROXIES or proxy_manager.get_proxies(),
+                           timeout=15)
         return Response(resp.content, mimetype=resp.headers.get("Content-Type", "image/jpeg"))
 
 except ImportError:

@@ -3,12 +3,12 @@ MultiSource - Open Library 数据源
 通过 Open Library REST API (openlibrary.org) 查询书籍元数据。
 """
 import json
-import os
 import time
 from typing import List, Optional
 
 import requests
 
+from . import proxy_manager
 from .book_record import BookRecord, canonical_isbn
 
 
@@ -17,7 +17,7 @@ from .book_record import BookRecord, canonical_isbn
 # ============================================================
 OL_BOOKS_API = "https://openlibrary.org/api/books"
 OL_SEARCH_API = "https://openlibrary.org/search.json"
-OL_TIMEOUT = 15
+OL_TIMEOUT = 10
 
 OL_HEADERS = {
     "User-Agent": (
@@ -27,13 +27,9 @@ OL_HEADERS = {
     "Accept": "application/json",
 }
 
-# 代理：从环境变量读取，NAS 环境无法直连 openlibrary.org
-_OL_PROXIES = None
-if os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY"):
-    _OL_PROXIES = {
-        "http": os.environ.get("HTTP_PROXY", ""),
-        "https": os.environ.get("HTTPS_PROXY", os.environ.get("HTTP_PROXY", "")),
-    }
+# 代理：由 proxy_manager 动态获取（解决 NAS 环境无法直连 openlibrary.org）
+def _get_proxies():
+    return proxy_manager.get_proxies()
 
 
 # ============================================================
@@ -118,7 +114,7 @@ class OpenLibrarySource:
         """获取 JSON 数据（优先走代理，因为 NAS 无法直连 openlibrary.org）"""
         try:
             resp = requests.get(url, params=params, headers=OL_HEADERS,
-                                timeout=OL_TIMEOUT, proxies=_OL_PROXIES, verify=False)
+                                timeout=OL_TIMEOUT, proxies=_get_proxies(), verify=False)
             if resp.status_code == 200:
                 return resp.json()
             elif resp.status_code != 200:
@@ -311,7 +307,7 @@ class OpenLibrarySource:
             edition_url = f"https://openlibrary.org{edition_key}.json"
             try:
                 resp = requests.get(edition_url, headers=OL_HEADERS,
-                                    timeout=OL_TIMEOUT, proxies=_OL_PROXIES, verify=False)
+                                    timeout=OL_TIMEOUT, proxies=_get_proxies(), verify=False)
                 if resp.status_code == 200:
                     ed_data = resp.json()
                     for w in ed_data.get("works", []):
@@ -330,7 +326,7 @@ class OpenLibrarySource:
         work_url = f"https://openlibrary.org{work_key}.json"
         try:
             resp = requests.get(work_url, headers=OL_HEADERS,
-                                timeout=OL_TIMEOUT, proxies=_OL_PROXIES, verify=False)
+                                timeout=OL_TIMEOUT, proxies=_get_proxies(), verify=False)
             if resp.status_code == 200:
                 wd = resp.json()
                 desc = wd.get("description", "")

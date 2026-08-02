@@ -7,12 +7,13 @@ import time
 import requests
 from typing import List, Optional
 
+from . import proxy_manager
 from .book_record import BookRecord, canonical_isbn
 
 # ============================================================
 # 配置
 # ============================================================
-GB_TIMEOUT = 10  # 查询超时（秒）
+GB_TIMEOUT = 8   # 查询超时（秒）
 GB_MAX_RESULTS = 10  # 最多返回条数
 
 # Google Books API 免费额度：无需 key 也能查询，但有限速
@@ -27,14 +28,9 @@ GB_HEADERS = {
     ),
 }
 
-# 代理：从环境变量读取
-import os
-_GB_PROXIES = None
-if os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY"):
-    _GB_PROXIES = {
-        "http": os.environ.get("HTTP_PROXY", ""),
-        "https": os.environ.get("HTTPS_PROXY", os.environ.get("HTTP_PROXY", "")),
-    }
+# 代理：由 proxy_manager 动态获取
+def _get_proxies():
+    return proxy_manager.get_proxies()
 
 
 class GoogleBooksSource:
@@ -142,14 +138,14 @@ class GoogleBooksSource:
         """获取 JSON 数据"""
         try:
             resp = requests.get(url, params=params, headers=GB_HEADERS,
-                                timeout=GB_TIMEOUT, proxies=_GB_PROXIES, verify=False)
+                                timeout=GB_TIMEOUT, proxies=_get_proxies(), verify=False)
             if resp.status_code == 200:
                 return resp.json()
             elif resp.status_code == 429:
-                print(f"[GoogleBooks] 被限速 (429)，等待 2 秒后重试...")
-                time.sleep(2)
+                print(f"[GoogleBooks] 被限速 (429)，等待 1 秒后重试...")
+                time.sleep(1)
                 resp = requests.get(url, params=params, headers=GB_HEADERS,
-                                    timeout=GB_TIMEOUT, proxies=_GB_PROXIES, verify=False)
+                                    timeout=GB_TIMEOUT, proxies=_get_proxies(), verify=False)
                 if resp.status_code == 200:
                     return resp.json()
             elif resp.status_code != 200:
