@@ -77,6 +77,17 @@ if _os.environ.get("HTTPS_PROXY") or _os.environ.get("HTTP_PROXY"):
         "https": _os.environ.get("HTTPS_PROXY", _os.environ.get("HTTP_PROXY", "")),
     }
 
+# 豆瓣登录 Cookie：从浏览器复制（F12 → Application → Cookies → douban.com）
+# 设置后可绕过 sec.douban.com 反爬验证
+DOUBAN_LOGIN_COOKIE = (
+    'bid=4ZZ9I5tpE7M; ll="108296"; '
+    '_vwo_uuid_v2=D53743C8290C63A65D2A386D73F3FBB99|68668eeef182069f959907ae4332d19d; '
+    'viewed="4893484"; _pk_id.100001.3ac3=5ab9c111c47d1095.1785652582.; '
+    "dbcl2=\"68406274:rD/0y8zwngs\"; ck=dJny; "
+    'frodotk_db="1af474f6b6eedcfd50dd5ee424cc96f7"; '
+    "ap_v=0,6.0; push_noty_num=0; push_doumail_num=0"
+)
+
 DEFAULT_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -101,7 +112,7 @@ class MultiSource(Metadata):
         # 初始化启用的源
         self.sources = []
         if SOURCE_DOUBAN_ENABLED:
-            self.sources.append(DoubanSource())
+            self.sources.append(DoubanSource(cookie=DOUBAN_LOGIN_COOKIE))
         if SOURCE_NLC_ENABLED:
             self.sources.append(NLCSource())
         if SOURCE_OPENLIBRARY_ENABLED:

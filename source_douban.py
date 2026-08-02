@@ -26,7 +26,7 @@ DOUBAN_BOOK_URL_PATTERN = re.compile(r".*/subject/(\d+)/?")
 
 # 搜索结果：一次拉 1 页（15 条），并发获取详情
 DOUBAN_SEARCH_PAGES = 1
-DOUBAN_PAGE_SIZE = 15
+DOUBAN_PAGE_SIZE = 5
 DOUBAN_MAX_DETAIL_WORKERS = 8
 DOUBAN_TIMEOUT = 8  # 秒
 
@@ -40,6 +40,9 @@ DEFAULT_HEADERS = {
     "Accept-Language": "zh-CN,zh;q=0.9",
 }
 
+# 豆瓣是国内站点，必须绕过容器代理直连，否则豆瓣检测到代理 IP 会跳转登录页
+NO_PROXY = {"http": None, "https": None}
+
 
 # ============================================================
 # 源模块
@@ -48,10 +51,16 @@ class DoubanSource:
     SOURCE_ID = "douban"
     SOURCE_NAME = "豆瓣"
 
-    def __init__(self):
+    def __init__(self, cookie: str = ""):
         self._parser = DoubanBookHtmlParser()
+        self._cookie = cookie.strip() if cookie else ""
 
-    def search(self, query: str, is_isbn: bool = False) -> List[BookRecord]:
+    def _get_headers(self) -> dict:
+        """返回请求头，如果有登录 cookie 则注入"""
+        headers = dict(DEFAULT_HEADERS)
+        if self._cookie:
+            headers["Cookie"] = self._cookie
+        return headers
         """搜索书籍"""
         return self._search(query)
 
@@ -121,7 +130,8 @@ class DoubanSource:
 
             resp = requests.get(
                 DOUBAN_SEARCH_URL, params=params,
-                headers=DEFAULT_HEADERS, timeout=DOUBAN_TIMEOUT
+                headers=self._get_headers(), timeout=DOUBAN_TIMEOUT,
+                proxies=NO_PROXY,
             )
             if resp.status_code not in (200, 201):
                 return []
@@ -227,7 +237,8 @@ class DoubanSource:
     def _fetch_book_detail(self, url: str) -> Optional[BookRecord]:
         """获取单本书的详情"""
         try:
-            resp = requests.get(url, headers=DEFAULT_HEADERS, timeout=DOUBAN_TIMEOUT)
+            resp = requests.get(url, headers=self._get_headers(), timeout=DOUBAN_TIMEOUT,
+                                proxies=NO_PROXY)
             if resp.status_code not in (200, 201):
                 return None
 
