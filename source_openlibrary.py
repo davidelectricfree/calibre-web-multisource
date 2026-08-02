@@ -3,6 +3,7 @@ MultiSource - Open Library 数据源
 通过 Open Library REST API (openlibrary.org) 查询书籍元数据。
 """
 import json
+import os
 import time
 from typing import List, Optional
 
@@ -16,7 +17,7 @@ from .book_record import BookRecord, canonical_isbn
 # ============================================================
 OL_BOOKS_API = "https://openlibrary.org/api/books"
 OL_SEARCH_API = "https://openlibrary.org/search.json"
-OL_TIMEOUT = 8
+OL_TIMEOUT = 15
 
 OL_HEADERS = {
     "User-Agent": (
@@ -25,6 +26,14 @@ OL_HEADERS = {
     ),
     "Accept": "application/json",
 }
+
+# 代理：从环境变量读取，NAS 环境无法直连 openlibrary.org
+_OL_PROXIES = None
+if os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY"):
+    _OL_PROXIES = {
+        "http": os.environ.get("HTTP_PROXY", ""),
+        "https": os.environ.get("HTTPS_PROXY", os.environ.get("HTTP_PROXY", "")),
+    }
 
 
 # ============================================================
@@ -106,12 +115,14 @@ class OpenLibrarySource:
         return []
 
     def _fetch_json(self, url: str, params: dict) -> Optional[dict]:
-        """获取 JSON 数据"""
+        """获取 JSON 数据（优先走代理，因为 NAS 无法直连 openlibrary.org）"""
         try:
             resp = requests.get(url, params=params, headers=OL_HEADERS,
-                                timeout=OL_TIMEOUT)
+                                timeout=OL_TIMEOUT, proxies=_OL_PROXIES)
             if resp.status_code == 200:
                 return resp.json()
+            elif resp.status_code != 200:
+                print(f"[OpenLibrary] HTTP {resp.status_code}: {url}")
         except Exception as e:
             print(f"[OpenLibrary] JSON 请求失败 {url}: {e}")
         return None
