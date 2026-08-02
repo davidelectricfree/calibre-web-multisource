@@ -56,17 +56,26 @@ PROVIDER_ID = "multisource"
 # 源开关：设为 False 可禁用某个数据源
 # 注意：NLC (国家图书馆) 和 OpenLibrary 从容器内访问经常超时/不可达，默认关闭
 SOURCE_DOUBAN_ENABLED = True
-SOURCE_NLC_ENABLED = False
-SOURCE_OPENLIBRARY_ENABLED = False
+SOURCE_NLC_ENABLED = False  # NLC 从 NAS 容器内不可达，仅在大陆网络环境可用
+SOURCE_OPENLIBRARY_ENABLED = True
 
 # 最大并发源查询数
 SOURCE_TIMEOUT = 12  # 单源超时（秒）
 
 # 封面代理（解决豆瓣防盗链）
 PROXY_DOUBAN_COVER = True
-DOUBAN_COVER_PROXY_HOST = ""  # 空 = 自动使用当前 host
+DOUBAN_COVER_PROXY_HOST = ""  # 空 = 自动使��当前 host
 DOUBAN_COVER_PROXY_PATH = "metadata/douban_cover?cover="
 DOUBAN_COVER_DOMAIN = "doubanio.com"
+
+# 代理设置：从环境变量读取，用于访问外网资源
+import os as _os
+_COVER_PROXIES = None
+if _os.environ.get("HTTPS_PROXY") or _os.environ.get("HTTP_PROXY"):
+    _COVER_PROXIES = {
+        "http": _os.environ.get("HTTP_PROXY", ""),
+        "https": _os.environ.get("HTTPS_PROXY", _os.environ.get("HTTP_PROXY", "")),
+    }
 
 DEFAULT_HEADERS = {
     "User-Agent": (
@@ -74,6 +83,7 @@ DEFAULT_HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     ),
     "Accept-Encoding": "gzip, deflate",
+    "Referer": "https://book.douban.com/",
 }
 
 
@@ -202,7 +212,8 @@ class MultiSource(Metadata):
             title = book.title
             if book.subtitle:
                 title = f"{title}: {book.subtitle}"
-            if book.confidence == "medium" and book.merge_note:
+            # 低置信标记：仅在多源合并且置信度低时加提示
+            if book.confidence == "medium" and book.merge_note and len(book.sources) > 1:
                 title = f"[?] {title}"
 
             # 构建标签
@@ -292,7 +303,8 @@ class MultiSource(Metadata):
                         cover_url = urllib.parse.unquote(qs.get("cover", [url])[0])
                     else:
                         cover_url = url
-                    resp = requests.get(cover_url, headers=DEFAULT_HEADERS)
+                    resp = requests.get(cover_url, headers=DEFAULT_HEADERS,
+                                       proxies=_COVER_PROXIES, timeout=15)
                     return h.save_cover(resp, book_path)
                 return save_cover(url, book_path)
 
@@ -333,7 +345,8 @@ try:
         cover_url = urllib.parse.unquote(request.args.get("cover", ""))
         if not cover_url:
             return Response("", status=400)
-        resp = requests.get(cover_url, headers=DEFAULT_HEADERS, timeout=10)
+        resp = requests.get(cover_url, headers=DEFAULT_HEADERS,
+                           proxies=_COVER_PROXIES, timeout=15)
         return Response(resp.content, mimetype=resp.headers.get("Content-Type", "image/jpeg"))
 
 except ImportError:
