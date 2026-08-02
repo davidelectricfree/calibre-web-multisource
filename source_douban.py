@@ -429,9 +429,14 @@ class DoubanBookHtmlParser:
 
     def _get_text(self, elements, default: str = "") -> str:
         """安全获取元素文本"""
-        if elements is None or len(elements) == 0:
+        if elements is None:
             return default
-        elem = elements[0]
+        if isinstance(elements, list):
+            if not elements:
+                return default
+            elem = elements[0]
+        else:
+            elem = elements
         if elem.text:
             return elem.text.strip()
         return default

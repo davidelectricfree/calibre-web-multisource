@@ -45,6 +45,21 @@ from .matcher import BookMatcher
 from .source_douban import DoubanSource
 from .source_nlc import NLCSource
 from .source_openlibrary import OpenLibrarySource
+from .source_dangdang import DangdangSource
+
+# WeRead 可选导入
+try:
+    from .source_weread import WeReadSource
+    _HAS_WEREAD = True
+except ImportError:
+    _HAS_WEREAD = False
+
+# Google Books 可选导入（NAS 网络可能不可达，导入失败时跳过）
+try:
+    from .source_googlebooks import GoogleBooksSource
+    _HAS_GOOGLE_BOOKS = True
+except ImportError:
+    _HAS_GOOGLE_BOOKS = False
 
 
 # ============================================================
@@ -56,8 +71,17 @@ PROVIDER_ID = "multisource"
 # 源开关：设为 False 可禁用某个数据源
 # 注意：NLC (国家图书馆) 和 OpenLibrary 从容器内访问经常超时/不可达，默认关闭
 SOURCE_DOUBAN_ENABLED = True
-SOURCE_NLC_ENABLED = False  # NLC 从 NAS 容器内不可达，仅在大陆网络环境可用
+SOURCE_NLC_ENABLED = False  # NLC 从 NAS 容器内不可达
 SOURCE_OPENLIBRARY_ENABLED = True
+SOURCE_DANGDANG_ENABLED = True
+SOURCE_WEREAD_ENABLED = True     # 微信读书（需 weread_apikey.txt）
+
+# ISBN 级联：从书名搜索结果中提取 ISBN，再精确查询其他源
+CASCADE_ENABLED = True       # 是否启用 ISBN 级联
+CASCADE_OPENLIBRARY = True   # 级联查询 OpenLibrary ISBN
+CASCADE_GOOGLE_BOOKS = True  # 级联查询 Google Books（需网络可达）
+GOOGLE_BOOKS_AS_SOURCE = True   # Google Books 是否作为常规源参与书名搜索
+CASCADE_TIMEOUT = 15         # ISBN 级联超时（比书名搜索稍长）
 
 # 最大并发源查询数
 SOURCE_TIMEOUT = 12  # 单源超时（秒）
@@ -77,16 +101,10 @@ if _os.environ.get("HTTPS_PROXY") or _os.environ.get("HTTP_PROXY"):
         "https": _os.environ.get("HTTPS_PROXY", _os.environ.get("HTTP_PROXY", "")),
     }
 
-# 豆瓣登录 Cookie：从浏览器复制（F12 → Application → Cookies → douban.com）
-# 设置后可绕过 sec.douban.com 反爬验证
-DOUBAN_LOGIN_COOKIE = (
-    'bid=4ZZ9I5tpE7M; ll="108296"; '
-    '_vwo_uuid_v2=D53743C8290C63A65D2A386D73F3FBB99|68668eeef182069f959907ae4332d19d; '
-    'viewed="4893484"; _pk_id.100001.3ac3=5ab9c111c47d1095.1785652582.; '
-    "dbcl2=\"68406274:rD/0y8zwngs\"; ck=dJny; "
-    'frodotk_db="1af474f6b6eedcfd50dd5ee424cc96f7"; '
-    "ap_v=0,6.0; push_noty_num=0; push_doumail_num=0"
-)
+# 豆瓣登录 Cookie（fallback，优先从 douban_cookie.txt 读取）
+# 从浏览器复制：F12 → Application → Cookies → douban.com，粘贴全部 Cookie 值
+# 安全提示：请勿将有效 Cookie 提交到公开仓库！建议始终使用 douban_cookie.txt
+DOUBAN_LOGIN_COOKIE = ""
 
 DEFAULT_HEADERS = {
     "User-Agent": (
@@ -117,6 +135,20 @@ class MultiSource(Metadata):
             self.sources.append(NLCSource())
         if SOURCE_OPENLIBRARY_ENABLED:
             self.sources.append(OpenLibrarySource())
+        if SOURCE_DANGDANG_ENABLED:
+            self.sources.append(DangdangSource())
+        if SOURCE_WEREAD_ENABLED and _HAS_WEREAD:
+            self.sources.append(WeReadSource())
+        if GOOGLE_BOOKS_AS_SOURCE and _HAS_GOOGLE_BOOKS:
+            self.sources.append(GoogleBooksSource())
+
+        # ISBN 级联源：仅在第二阶段用 ISBN 精确查询
+        self._cascade_sources = []
+        if CASCADE_ENABLED:
+            if CASCADE_OPENLIBRARY:
+                self._cascade_sources.append(OpenLibrarySource())
+            if CASCADE_GOOGLE_BOOKS and _HAS_GOOGLE_BOOKS:
+                self._cascade_sources.append(GoogleBooksSource())
 
         # 安装封面代理
         self._hack_cover_proxy()
@@ -130,6 +162,10 @@ class MultiSource(Metadata):
         """
         Calibre-Web 插件标准接口。
         返回 MetaRecord 列表供 UI 展示。
+
+        两阶段搜索：
+          阶段1: 书名搜索 → 所有源并行搜索
+          阶段2: ISBN 级联 → 用收集到的 ISBN 并行查询级联源
         """
         if not self.active or not self.sources:
             return []
@@ -141,13 +177,25 @@ class MultiSource(Metadata):
         # 判断是否为 ISBN 搜索
         is_isbn = self._is_isbn_query(query)
 
-        # 并行查询所有源
-        log.info(f"[MultiSource] 搜索 '{query}' (is_isbn={is_isbn})")
+        # ---- 阶段1: 并行查询所有源 ----
+        log.info(f"[MultiSource] 阶段1: 搜索 '{query}' (is_isbn={is_isbn})")
         all_records = self._query_all_sources(query, is_isbn)
 
         if not all_records:
             log.info("[MultiSource] 所有源返回空结果")
             return []
+
+        # ---- 阶段2: ISBN 级联（仅非 ISBN 搜索时执行）----
+        phase2_records = []
+        if not is_isbn and self._cascade_sources:
+            isbns = self._extract_isbns(all_records)
+            if isbns:
+                log.info(f"[MultiSource] 阶段2: ISBN 级联 {len(isbns)} 个 ISBN → "
+                         f"{[s.SOURCE_NAME for s in self._cascade_sources]}")
+                phase2_records = self._query_isbn_cascade(isbns)
+                if phase2_records:
+                    log.info(f"[MultiSource] 级联获得 {len(phase2_records)} 条新记录")
+                    all_records.extend(phase2_records)
 
         # 去重合并
         merged = self.matcher.merge(all_records)
@@ -194,6 +242,43 @@ class MultiSource(Metadata):
     def _query_source(source, query: str, is_isbn: bool) -> List[BookRecord]:
         return source.search(query, is_isbn)
 
+    @staticmethod
+    def _extract_isbns(records: List[BookRecord]) -> List[str]:
+        """从阶段1结果中提取去重的有效 ISBN-13"""
+        seen = set()
+        isbns = []
+        for r in records:
+            isbn = canonical_isbn(r.isbn) if r.isbn else ""
+            if isbn and isbn not in seen:
+                seen.add(isbn)
+                isbns.append(isbn)
+        return isbns
+
+    def _query_isbn_cascade(self, isbns: List[str]) -> List[BookRecord]:
+        """用 ISBN 并行查询所有级联源"""
+        all_records = []
+
+        with ThreadPoolExecutor(max_workers=len(self._cascade_sources) * 2) as pool:
+            futures = {}
+            for isbn in isbns:
+                for source in self._cascade_sources:
+                    future = pool.submit(source.search, isbn, True)
+                    futures[future] = (source, isbn)
+
+            for future in as_completed(futures):
+                source, isbn = futures[future]
+                try:
+                    records = future.result(timeout=CASCADE_TIMEOUT)
+                    if records:
+                        log.info(f"[MultiSource] {source.SOURCE_NAME} "
+                                 f"ISBN={isbn}: {len(records)} 条")
+                        all_records.extend(records)
+                except Exception as e:
+                    log.error(f"[MultiSource] {source.SOURCE_NAME} "
+                              f"ISBN={isbn} 级联失败: {e}")
+
+        return all_records
+
     def _to_meta_records(self, merged_books: List[MergedBook]) -> List[MetaRecord]:
         """将 MergedBook 列表转换为 Calibre-Web 的 MetaRecord 列表"""
         results = []
@@ -216,8 +301,10 @@ class MultiSource(Metadata):
             identifiers = dict(book.identifiers)
             if book.isbn:
                 identifiers["isbn"] = book.isbn
-            if book.clc_code:
-                identifiers["clc"] = book.clc_code
+            if book.series:
+                identifiers["series"] = book.series
+            if book.series_index:
+                identifiers["series_index"] = book.series_index
 
             # 合并 note 到标题
             title = book.title
@@ -239,7 +326,8 @@ class MultiSource(Metadata):
             if book.field_sources:
                 source_tags = []
                 for field, src in book.field_sources.items():
-                    short = {"豆瓣": "DB", "国家图书馆": "NLC", "Open Library": "OL"}.get(src, src[:3])
+                    short = {"豆瓣": "DB", "国家图书馆": "NLC", "Open Library": "OL",
+                             "当当": "DD"}.get(src, src[:3])
                     source_tags.append(f"{field}:{short}")
                 # 只取前几个关键字段
                 key_fields = ["title", "authors", "publisher", "isbn",
@@ -249,7 +337,7 @@ class MultiSource(Metadata):
                     if f in book.field_sources:
                         src = book.field_sources[f]
                         short = {"豆瓣": "DB", "国家图书馆": "NLC",
-                                 "Open Library": "OL"}.get(src, src[:3])
+                                 "Open Library": "OL", "当当": "DD"}.get(src, src[:3])
                         key_source_tags.append(f"{f}={short}")
                 tags.extend(key_source_tags[:8])
 

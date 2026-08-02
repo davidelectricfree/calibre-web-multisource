@@ -118,7 +118,7 @@ class OpenLibrarySource:
         """获取 JSON 数据（优先走代理，因为 NAS 无法直连 openlibrary.org）"""
         try:
             resp = requests.get(url, params=params, headers=OL_HEADERS,
-                                timeout=OL_TIMEOUT, proxies=_OL_PROXIES)
+                                timeout=OL_TIMEOUT, proxies=_OL_PROXIES, verify=False)
             if resp.status_code == 200:
                 return resp.json()
             elif resp.status_code != 200:
@@ -170,12 +170,17 @@ class OpenLibrarySource:
         elif isbn:
             record.isbn = canonical_isbn(isbn)
 
-        # 简介
+        # 简介（先从 Edition 直接获取）
         description = book_data.get("description", "")
         if isinstance(description, dict):
             record.description = description.get("value", "")
         elif isinstance(description, str):
             record.description = description
+
+        # 二级查询：从 Work API 获取简介（Edition 数据通常不含 description）
+        if not record.description:
+            record.description = self._fetch_work_description(
+                book_data.get("works", []), book_data.get("key", ""))
 
         # 封面
         covers = book_data.get("cover", {})
@@ -272,6 +277,11 @@ class OpenLibrarySource:
         subjects = doc.get("subject", [])
         record.tags = [s.strip() for s in subjects[:20] if s]
 
+        # 简介（search API 不直接返回，通过 work key 二级查询）
+        work_key = doc.get("key", "")
+        if work_key:
+            record.description = self._fetch_work_description_by_key(work_key)
+
         # 封面
         cover_id = doc.get("cover_i")
         if cover_id:
@@ -283,3 +293,51 @@ class OpenLibrarySource:
         record.raw_id = ol_key.replace("/works/", "").replace("/books/", "")
 
         return record
+
+    # ============================================================
+    # Work API 二级查询（Edition 不含简介，需从 Work 获取）
+    # ============================================================
+
+    def _fetch_work_description(self, works: list, edition_key: str = "") -> str:
+        """通过 Edition 的 works 列表获取简介"""
+        # 方法1: 通过 works 列表直接查
+        for work in works:
+            desc = self._fetch_work_description_by_key(work.get("key", ""))
+            if desc:
+                return desc
+
+        # 方法2: 如果没有 works 列表，通过 edition key 查 edition 详情拿 works
+        if edition_key and not works:
+            edition_url = f"https://openlibrary.org{edition_key}.json"
+            try:
+                resp = requests.get(edition_url, headers=OL_HEADERS,
+                                    timeout=OL_TIMEOUT, proxies=_OL_PROXIES, verify=False)
+                if resp.status_code == 200:
+                    ed_data = resp.json()
+                    for w in ed_data.get("works", []):
+                        desc = self._fetch_work_description_by_key(w.get("key", ""))
+                        if desc:
+                            return desc
+            except Exception:
+                pass
+
+        return ""
+
+    def _fetch_work_description_by_key(self, work_key: str) -> str:
+        """通过 Work key 获取简介"""
+        if not work_key:
+            return ""
+        work_url = f"https://openlibrary.org{work_key}.json"
+        try:
+            resp = requests.get(work_url, headers=OL_HEADERS,
+                                timeout=OL_TIMEOUT, proxies=_OL_PROXIES, verify=False)
+            if resp.status_code == 200:
+                wd = resp.json()
+                desc = wd.get("description", "")
+                if isinstance(desc, dict):
+                    return desc.get("value", "")
+                elif isinstance(desc, str):
+                    return desc
+        except Exception:
+            pass
+        return ""

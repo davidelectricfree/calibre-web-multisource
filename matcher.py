@@ -6,8 +6,23 @@ MultiSource - 书籍去重与匹配合并引擎
   第二层：复合指纹匹配（SHA256 归一化标题+作者+出版社）
   第三层：模糊匹配打分（Levenshtein 相似度加权评分）
 """
+import re
 from typing import List, Tuple, Dict, Optional
 from .book_record import BookRecord, MergedBook, normalize_text, canonical_isbn
+
+
+# ============================================================
+# 作者名称清洗
+# ============================================================
+
+AUTHOR_ROLE_PATTERN = re.compile(r'[，,。.\s\u3000\u00a0]*(著|编|译|主编|校|校译|编著|编译|编撰|等|绘|摄影)\s*$')
+
+
+def clean_author_name(name: str) -> str:
+    """去掉作者名称末尾的角色标注（著/编/译 等）"""
+    if not name:
+        return name
+    return AUTHOR_ROLE_PATTERN.sub('', name).strip()
 
 
 # ============================================================
@@ -243,7 +258,7 @@ class BookMatcher:
           - ISBN：取所有源中最完整的
         """
         # 源优先级
-        source_priority = {"douban": 0, "nlc": 1, "openlibrary": 2}
+        source_priority = {"douban": 0, "dangdang": 1, "jd": 2, "nlc": 3, "openlibrary": 4}
 
         # 计算置信度
         if method == "isbn":
@@ -292,6 +307,7 @@ class BookMatcher:
         clc_code = self._pick_clc(sorted_records)
         url = self._pick_by_priority(sorted_records, "url")
         isbn = self._pick_isbn(sorted_records)
+        series_index = self._pick_by_priority(sorted_records, "series_index")
 
         # 合并 identifiers
         identifiers = {}
@@ -321,6 +337,7 @@ class BookMatcher:
             clc_code=clc_code,
             url=url,
             identifiers=identifiers,
+            series_index=series_index,
             sources=list(set(r.source_name for r in sorted_records)),
             confidence=confidence,
             merge_note=note,
@@ -348,6 +365,7 @@ class BookMatcher:
             clc_code=record.clc_code,
             url=record.url,
             identifiers=record.identifiers,
+            series_index=record.series_index,
             sources=[record.source_name],
             confidence="high" if record.isbn else "medium",
             merge_note="" if record.isbn else "仅一个数据源返回，无 ISBN 校验",
@@ -373,15 +391,16 @@ class BookMatcher:
         return ""
 
     def _merge_authors(self, records: List[BookRecord]) -> List[str]:
-        """合并所有源作者去重"""
+        """合并所有源作者去重，并清洗角色标注"""
         seen = set()
         result = []
         for r in records:
             for a in r.authors:
-                na = normalize_text(a)
+                cleaned = clean_author_name(a)
+                na = normalize_text(cleaned)
                 if na and na not in seen:
                     seen.add(na)
-                    result.append(a)
+                    result.append(cleaned)
         return result if result else ["未知作者"]
 
     def _merge_translators(self, records: List[BookRecord]) -> List[str]:
@@ -412,12 +431,16 @@ class BookMatcher:
         return max(descs, key=len) if descs else ""
 
     def _pick_cover(self, records: List[BookRecord]) -> str:
-        """封面优先级：豆瓣 > OpenLibrary > NLC"""
-        priority = ["douban", "openlibrary", "nlc"]
+        """封面优先级：豆瓣 > 当当 > OpenLibrary > NLC"""
+        priority = ["douban", "dangdang", "openlibrary", "nlc"]
         for src in priority:
             for r in records:
                 if r.source_id == src and r.cover_url:
                     return r.cover_url
+        # 任何源的封面都可以
+        for r in records:
+            if r.cover_url:
+                return r.cover_url
         return ""
 
     def _pick_rating(self, records: List[BookRecord]) -> float:
@@ -467,7 +490,7 @@ class BookMatcher:
         result = {}
         fields = ["title", "subtitle", "authors", "publisher", "published_date",
                    "isbn", "description", "cover_url", "rating", "tags", "series",
-                   "language", "pages", "clc_code"]
+                   "language", "pages", "clc_code", "series_index"]
         for field in fields:
             for r in records:
                 val = getattr(r, field, None)

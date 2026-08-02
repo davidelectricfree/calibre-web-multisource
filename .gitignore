@@ -1,0 +1,16 @@
+# API keys & credentials
+douban_cookie.txt
+googlebooks_apikey.txt
+weread_apikey.txt
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Backup files
+*.bak
+backup_*/
+
+# OS files
+.DS_Store
+Thumbs.db

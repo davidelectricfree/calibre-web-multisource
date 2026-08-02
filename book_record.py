@@ -71,6 +71,7 @@ class BookRecord:
     language: str = ""
     pages: int = 0
     clc_code: str = ""         # NLC 特有：中图分类号
+    series_index: str = ""
     url: str = ""
     raw_id: str = ""           # 源站内部 ID（如豆瓣 subject id）
     identifiers: Dict[str, str] = field(default_factory=dict)
@@ -108,6 +109,7 @@ class MergedBook:
     clc_code: str = ""
     url: str = ""
     identifiers: Dict[str, str] = field(default_factory=dict)
+    series_index: str = ""
 
     # 合并元信息
     sources: List[str] = field(default_factory=list)
@@ -135,6 +137,7 @@ class MergedBook:
             "clc_code": self.clc_code,
             "url": self.url,
             "identifiers": self.identifiers,
+            "series_index": self.series_index,
             "sources": self.sources,
             "confidence": self.confidence,
             "merge_note": self.merge_note,
