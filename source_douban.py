@@ -2,6 +2,7 @@
 MultiSource - 豆瓣数据源
 从 book.douban.com 爬取书籍元数据。
 """
+import os
 import random
 import re
 import time
@@ -56,11 +57,27 @@ class DoubanSource:
         self._cookie = cookie.strip() if cookie else ""
 
     def _get_headers(self) -> dict:
-        """返回请求头，如果有登录 cookie 则注入"""
+        """返回请求头；优先从 douban_cookie.txt 读取，fallback 到 __init__ 传入的硬编码值"""
         headers = dict(DEFAULT_HEADERS)
-        if self._cookie:
-            headers["Cookie"] = self._cookie
+        cookie = self._read_cookie_file() or self._cookie
+        if cookie:
+            headers["Cookie"] = cookie
         return headers
+
+    def _read_cookie_file(self) -> str:
+        """从插件目录的 douban_cookie.txt 读取 Cookie（无需重启容器即可更新）"""
+        try:
+            cookie_path = os.path.join(os.path.dirname(__file__), "douban_cookie.txt")
+            if os.path.exists(cookie_path):
+                with open(cookie_path, "r", encoding="utf-8") as f:
+                    content = f.read().strip()
+                    if content:
+                        return content
+        except Exception:
+            pass
+        return ""
+
+    def search(self, query: str, is_isbn: bool = False) -> List[BookRecord]:
         """搜索书籍"""
         return self._search(query)
 
