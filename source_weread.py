@@ -9,7 +9,6 @@ import requests
 from typing import List, Optional, Dict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from . import proxy_manager
 from .book_record import BookRecord, canonical_isbn
 
 # ============================================================
@@ -33,11 +32,6 @@ WEREAD_HEADERS = {
     ),
     "Content-Type": "application/json",
 }
-
-# 代理：由 proxy_manager 动态获取
-def _get_proxies():
-    return proxy_manager.get_proxies()
-
 
 class WeReadSource:
     """微信读书 Agent Gateway 数据源"""
@@ -104,7 +98,6 @@ class WeReadSource:
                 json=body,
                 headers=self._get_auth_headers(),
                 timeout=WEREAD_TIMEOUT,
-                proxies=_get_proxies(),
                 verify=False,
             )
             if resp.status_code == 200:
@@ -116,7 +109,6 @@ class WeReadSource:
                     json=body,
                     headers=self._get_auth_headers(),
                     timeout=WEREAD_TIMEOUT,
-                    proxies=_get_proxies(),
                     verify=False,
                 )
                 if resp.status_code == 200:

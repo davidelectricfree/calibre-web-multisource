@@ -63,6 +63,15 @@ except ImportError:
     _HAS_GOOGLE_BOOKS = False
 
 
+def _sanitize_author(name: str) -> str:
+    """Clean author name: dots -> spaces, merge spaces"""
+    if not name:
+        return name
+    name = name.replace(".", " ")
+    name = re.sub(r" +", " ", name)
+    return name.strip()
+
+
 # ============================================================
 # 配置
 # ============================================================
@@ -93,10 +102,6 @@ DOUBAN_COVER_PROXY_HOST = ""  # 空 = 自动使��当前 host
 DOUBAN_COVER_PROXY_PATH = "metadata/douban_cover?cover="
 DOUBAN_COVER_DOMAIN = "doubanio.com"
 
-# 代理：由 proxy_manager 统一管理（自动检测主/备链路）
-_px = proxy_manager.get_proxies()
-_COVER_PROXIES = {"http": _px["http"], "https": _px["https"]} if _px else None
-_PROXY_INFO = proxy_manager.get_current_proxy_info()
 
 
 DEFAULT_HEADERS = {
@@ -352,7 +357,7 @@ class MultiSource(Metadata):
             meta = MultiSourceMetaRecord(
                 id=record_id,
                 title=title,
-                authors=book.authors,
+                authors=[_sanitize_author(a) for a in book.authors],
                 publisher=book.publisher,
                 description=book.description,
                 url=book.url,
@@ -400,7 +405,6 @@ class MultiSource(Metadata):
                     else:
                         cover_url = url
                     resp = requests.get(cover_url, headers=DEFAULT_HEADERS,
-                                       proxies=_COVER_PROXIES or proxy_manager.get_proxies(),
                                        timeout=15)
                     return h.save_cover(resp, book_path)
                 return save_cover(url, book_path)
@@ -443,7 +447,6 @@ try:
         if not cover_url:
             return Response("", status=400)
         resp = requests.get(cover_url, headers=DEFAULT_HEADERS,
-                           proxies=_COVER_PROXIES or proxy_manager.get_proxies(),
                            timeout=15)
         return Response(resp.content, mimetype=resp.headers.get("Content-Type", "image/jpeg"))
 
