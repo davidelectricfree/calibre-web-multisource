@@ -1,0 +1,21 @@
+services:
+   calibre-web:
+     image: linuxserver/calibre-web:latest
+     container_name: calibre-web
+     environment:
+         - PUID=1000
+         - PGID=1000
+         - TZ=Asia/Shanghai
+         - DOCKER_MODS=linuxserver/mods:universal-calibre
+         - OAUTHLIB_RELAX_TOKEN_SCOPE=1
+         - CALIBRE_LOCALHOST=true
+         - HTTP_PROXY=http://192.168.1.249:20172
+         - HTTPS_PROXY=http://192.168.1.249:20172
+         - NO_PROXY=localhost,127.0.0.1,192.168.0.0/16,172.16.0.0/12,10.0.0.0/8
+     volumes:
+         - ./config:/config
+         - /volume1/documents/ebook:/books
+         - ./douban:/app/calibre-web/cps/metadata_provider
+     ports:
+         - 8083:8083
+     restart: unless-stopped
