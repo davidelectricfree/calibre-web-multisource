@@ -187,15 +187,15 @@ class BookMatcher:
 
     def _cluster_pairs(self, pairs: List[Tuple[BookRecord, BookRecord, float]]) -> List[List[BookRecord]]:
         """将两两配对聚类成组（传递闭包）"""
-        # Union-Find
+        # Union-Find，用 id() 追踪对象身份（BookRecord 不可哈希）
         all_records = []
-        idx_map = {}
+        idx_map = {}  # id(record) -> index
         for a, b, _ in pairs:
-            if a not in idx_map:
-                idx_map[a] = len(all_records)
+            if id(a) not in idx_map:
+                idx_map[id(a)] = len(all_records)
                 all_records.append(a)
-            if b not in idx_map:
-                idx_map[b] = len(all_records)
+            if id(b) not in idx_map:
+                idx_map[id(b)] = len(all_records)
                 all_records.append(b)
 
         n = len(all_records)
@@ -213,7 +213,7 @@ class BookMatcher:
                 parent[px] = py
 
         for a, b, _ in pairs:
-            union(idx_map[a], idx_map[b])
+            union(idx_map[id(a)], idx_map[id(b)])
 
         # 收集分组
         groups: Dict[int, List[BookRecord]] = {}
