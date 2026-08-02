@@ -101,10 +101,6 @@ if _os.environ.get("HTTPS_PROXY") or _os.environ.get("HTTP_PROXY"):
         "https": _os.environ.get("HTTPS_PROXY", _os.environ.get("HTTP_PROXY", "")),
     }
 
-# 豆瓣登录 Cookie（fallback，优先从 douban_cookie.txt 读取）
-# 从浏览器复制：F12 → Application → Cookies → douban.com，粘贴全部 Cookie 值
-# 安全提示：请勿将有效 Cookie 提交到公开仓库！建议始终使用 douban_cookie.txt
-DOUBAN_LOGIN_COOKIE = ""
 
 DEFAULT_HEADERS = {
     "User-Agent": (
@@ -130,7 +126,7 @@ class MultiSource(Metadata):
         # 初始化启用的源
         self.sources = []
         if SOURCE_DOUBAN_ENABLED:
-            self.sources.append(DoubanSource(cookie=DOUBAN_LOGIN_COOKIE))
+            self.sources.append(DoubanSource())
         if SOURCE_NLC_ENABLED:
             self.sources.append(NLCSource())
         if SOURCE_OPENLIBRARY_ENABLED:

@@ -52,14 +52,13 @@ class DoubanSource:
     SOURCE_ID = "douban"
     SOURCE_NAME = "豆瓣"
 
-    def __init__(self, cookie: str = ""):
+    def __init__(self):
         self._parser = DoubanBookHtmlParser()
-        self._cookie = cookie.strip() if cookie else ""
 
     def _get_headers(self) -> dict:
-        """返回请求头；优先从 douban_cookie.txt 读取，fallback 到 __init__ 传入的硬编码值"""
+        """返回请求头；从 douban_cookie.txt 读取 Cookie（必须），无文件则不带 Cookie"""
         headers = dict(DEFAULT_HEADERS)
-        cookie = self._read_cookie_file() or self._cookie
+        cookie = self._read_cookie_file()
         if cookie:
             headers["Cookie"] = cookie
         return headers
