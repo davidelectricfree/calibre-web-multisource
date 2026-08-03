@@ -172,41 +172,45 @@ class MultiSource(Metadata):
         if not query:
             return []
 
-        # 判断是否为 ISBN 搜索
-        is_isbn = self._is_isbn_query(query)
+        try:
+            # 判断是否为 ISBN 搜索
+            is_isbn = self._is_isbn_query(query)
 
-        # ---- 代理预热：提前检测链路，缓存结果 ----
-        _proxies = proxy_manager.get_proxies()
-        _px_info = proxy_manager.get_current_proxy_info()
-        log.info(f"[MultiSource] 代理: {_px_info}")
+            # ---- 代理预热：提前检测链路，缓存结果 ----
+            _proxies = proxy_manager.get_proxies()
+            _px_info = proxy_manager.get_current_proxy_info()
+            log.info(f"[MultiSource] 代理: {_px_info}")
 
-        # ---- 阶段1: 并行查询所有源 ----
-        log.info(f"[MultiSource] 阶段1: 搜索 '{query}' (is_isbn={is_isbn})")
-        all_records = self._query_all_sources(query, is_isbn)
+            # ---- 阶段1: 并行查询所有源 ----
+            log.info(f"[MultiSource] 阶段1: 搜索 '{query}' (is_isbn={is_isbn})")
+            all_records = self._query_all_sources(query, is_isbn)
 
-        if not all_records:
-            log.info("[MultiSource] 所有源返回空结果")
+            if not all_records:
+                log.info("[MultiSource] 所有源返回空结果")
+                return []
+
+            # ---- 阶段2: ISBN 级联（仅非 ISBN 搜索时执行）----
+            phase2_records = []
+            if not is_isbn and self._cascade_sources:
+                isbns = self._extract_isbns(all_records)
+                if isbns:
+                    log.info(f"[MultiSource] 阶段2: ISBN 级联 {len(isbns)} 个 ISBN → "
+                             f"{[s.SOURCE_NAME for s in self._cascade_sources]}")
+                    phase2_records = self._query_isbn_cascade(isbns)
+                    if phase2_records:
+                        log.info(f"[MultiSource] 级联获得 {len(phase2_records)} 条新记录")
+                        all_records.extend(phase2_records)
+
+            # 去重合并
+            merged = self.matcher.merge(all_records)
+            log.info(f"[MultiSource] 合并后: {len(merged)} 条 (原始 {len(all_records)} 条)")
+
+            # 转换为 MetaRecord 列表
+            return self._to_meta_records(merged)
+
+        except Exception as e:
+            log.error(f"[MultiSource] 搜索异常: {e}", exc_info=True)
             return []
-
-        # ---- 阶段2: ISBN 级联（仅非 ISBN 搜索时执行）----
-        phase2_records = []
-        if not is_isbn and self._cascade_sources:
-            isbns = self._extract_isbns(all_records)
-            if isbns:
-                log.info(f"[MultiSource] 阶段2: ISBN 级联 {len(isbns)} 个 ISBN → "
-                         f"{[s.SOURCE_NAME for s in self._cascade_sources]}")
-                phase2_records = self._query_isbn_cascade(isbns)
-                if phase2_records:
-                    log.info(f"[MultiSource] 级联获得 {len(phase2_records)} 条新记录")
-                    all_records.extend(phase2_records)
-
-        # 去重合并
-        merged = self.matcher.merge(all_records)
-        log.info(f"[MultiSource] 合并后: {len(merged)} 条 (原始 {len(all_records)} 条)")
-
-        # 转换为 MetaRecord 列表
-        return self._to_meta_records(merged)
-
     # ---- 内部方法 ----
 
     @staticmethod
@@ -304,74 +308,78 @@ class MultiSource(Metadata):
         results = []
 
         for book in merged_books:
-            # 构建来源信息
-            source_names = " + ".join(book.sources)
-            if book.confidence == "medium":
-                source_names += " [低置信]"
-            elif book.confidence == "low":
-                source_names += " [不匹配]"
+            try:
+                # 构建来源信息
+                source_names = " + ".join(book.sources)
+                if book.confidence == "medium":
+                    source_names += " [低置信]"
+                elif book.confidence == "low":
+                    source_names += " [不匹配]"
 
-            source_info = MetaSourceInfo(
-                id=PROVIDER_ID,
-                description=f"{PROVIDER_NAME} ({source_names})",
-                link=book.url or "https://book.douban.com/",
-            )
+                source_info = MetaSourceInfo(
+                    id=PROVIDER_ID,
+                    description=f"{PROVIDER_NAME} ({source_names})",
+                    link=book.url or "https://book.douban.com/",
+                )
 
-            # 构建标识符
-            identifiers = dict(book.identifiers)
-            if book.isbn:
-                identifiers["isbn"] = book.isbn
-            if book.series:
-                identifiers["series"] = book.series
-            if book.series_index:
-                identifiers["series_index"] = book.series_index
+                # 构建标识符
+                identifiers = dict(book.identifiers)
+                if book.isbn:
+                    identifiers["isbn"] = book.isbn
+                if book.series:
+                    identifiers["series"] = book.series
+                if book.series_index:
+                    identifiers["series_index"] = book.series_index
 
-            # 合并 note 到标题
-            title = book.title
-            if book.subtitle:
-                title = f"{title}: {book.subtitle}"
-            # 低置信标记：仅在多源合并且置信度低时加提示
-            if book.confidence == "medium" and book.merge_note and len(book.sources) > 1:
-                title = f"[?] {title}"
+                # 合并 note 到标题
+                title = book.title
+                if book.subtitle:
+                    title = f"{title}: {book.subtitle}"
+                # 低置信标记：仅在多源合并且置信度低时加提示
+                if book.confidence == "medium" and book.merge_note and len(book.sources) > 1:
+                    title = f"[?] {title}"
 
-            # 构建标签
-            tags = list(book.tags)
-            if book.publisher:
-                tags.append(book.publisher)
-            if book.language:
-                tags.append(book.language)
-            if book.series:
-                tags.append(book.series)
+                # 构建标签
+                tags = list(book.tags)
+                if book.publisher:
+                    tags.append(book.publisher)
+                if book.language:
+                    tags.append(book.language)
+                if book.series:
+                    tags.append(book.series)
 
-            # 去重
-            tags = self._dedup_tags(tags)
+                # 去重
+                tags = self._dedup_tags(tags)
 
-            # 处理封面
-            cover = book.cover_url
-            if cover and PROXY_DOUBAN_COVER and DOUBAN_COVER_DOMAIN in cover:
-                pass  # cover 代理在 save 时处理
+                # 处理封面
+                cover = book.cover_url
+                if cover and PROXY_DOUBAN_COVER and DOUBAN_COVER_DOMAIN in cover:
+                    pass  # cover 代理在 save 时处理
 
-            record_id = book.isbn or str(hash(book.title))[:16]
+                record_id = book.isbn or str(hash(book.title))[:16]
 
-            # 创建 MetaRecord
-            meta = MultiSourceMetaRecord(
-                id=record_id,
-                title=title,
-                authors=[_sanitize_author(a) for a in book.authors],
-                publisher=book.publisher,
-                description=book.description,
-                url=book.url,
-                source=source_info,
-                identifiers=identifiers,
-                tags=tags,
-                cover=cover,
-                rating=book.rating,
-                publishedDate=book.published_date,
-                series=book.series,
-            )
+                # 创建 MetaRecord
+                meta = MultiSourceMetaRecord(
+                    id=record_id,
+                    title=title,
+                    authors=[_sanitize_author(a) for a in book.authors],
+                    publisher=book.publisher,
+                    description=book.description,
+                    url=book.url,
+                    source=source_info,
+                    identifiers=identifiers,
+                    tags=tags,
+                    cover=cover,
+                    rating=book.rating,
+                    publishedDate=book.published_date,
+                    series=book.series,
+                )
 
-            results.append(meta)
+                results.append(meta)
 
+            except Exception as e:
+                log.error(f"[MultiSource] 记录转换失败 ({getattr(book, 'title', '?')}): {e}")
+                continue
         return results
 
     @staticmethod

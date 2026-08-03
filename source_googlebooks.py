@@ -3,6 +3,7 @@ MultiSource - Google Books API 数据源
 支持书名搜索和 ISBN 精确查询
 API: https://developers.google.com/books/docs/v1/using
 """
+import os
 import time
 import requests
 from typing import List, Optional
@@ -161,7 +162,7 @@ class GoogleBooksSource:
             source_name=self.SOURCE_NAME,
         )
 
-        info = item.get("volumeInfo", {})
+        info = item.get("volumeInfo") or {}
 
         # 标题
         record.title = info.get("title", "").strip()

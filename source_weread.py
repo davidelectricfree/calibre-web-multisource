@@ -126,8 +126,8 @@ class WeReadSource:
             return []
 
         results = []
-        for section in data.get("results", []):
-            for book in section.get("books", []):
+        for section in (data.get("results") or []):
+            for book in (section.get("books") or []):
                 results.append(book)
 
         return results
@@ -143,7 +143,7 @@ class WeReadSource:
             with ThreadPoolExecutor(max_workers=WEREAD_DETAIL_WORKERS) as pool:
                 futures = {}
                 for book in detail_candidates:
-                    info = book.get("bookInfo", {})
+                    info = book.get("bookInfo") or {}
                     bid = info.get("bookId", "")
                     if bid:
                         futures[pool.submit(self._get_book_detail, bid)] = book
@@ -153,14 +153,14 @@ class WeReadSource:
                     try:
                         detail = future.result(timeout=WEREAD_TIMEOUT)
                         if detail:
-                            bid = book.get("bookInfo", {}).get("bookId", "")
+                            bid = (book.get("bookInfo") or {}).get("bookId", "")
                             detail_map[bid] = detail
                     except Exception as e:
                         print(f"[WeRead] 获取详情失败: {e}")
 
         # 构建 BookRecord
         for book in search_results:
-            info = book.get("bookInfo", {})
+            info = book.get("bookInfo") or {}
             bid = info.get("bookId", "")
 
             detail = detail_map.get(bid, {})
