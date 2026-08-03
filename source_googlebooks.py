@@ -10,7 +10,7 @@ from typing import List, Optional
 
 from . import proxy_manager
 from requests.adapters import HTTPAdapter
-from .book_record import BookRecord, canonical_isbn
+from .book_record import BookRecord, canonical_isbn, normalize_date, normalize_date
 
 # ============================================================
 # 配置
@@ -187,7 +187,7 @@ class GoogleBooksSource:
 
         # 出版日期
         pub_date = info.get("publishedDate", "")
-        record.published_date = pub_date.strip() if pub_date else ""
+        record.published_date = normalize_date(pub_date) if pub_date else ""
 
         # ISBN
         identifiers = info.get("industryIdentifiers", [])

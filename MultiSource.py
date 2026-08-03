@@ -41,7 +41,7 @@ def _get_helper():
     return helper
 
 from . import proxy_manager
-from .book_record import BookRecord, MergedBook, canonical_isbn
+from .book_record import BookRecord, MergedBook, canonical_isbn, normalize_date
 from .matcher import BookMatcher
 from .source_douban import DoubanSource
 from .source_nlc import NLCSource
@@ -335,10 +335,13 @@ class MultiSource(Metadata):
                 if book.series:
                     identifiers["series"] = book.series
                 if book.series_index:
-                    identifiers["series_index"] = book.series_index
+                    try:
+                    identifiers["series_index"] = int(float(book.series_index))
+                except (ValueError, TypeError):
+                    pass
 
                 # 合并 note 到标题
-                title = book.title
+                title = _sanitize_author(book.title)
                 if book.subtitle:
                     title = f"{title}: {book.subtitle}"
                 # 低置信标记：仅在多源合并且置信度低时加提示
@@ -376,8 +379,8 @@ class MultiSource(Metadata):
                     identifiers=identifiers,
                     tags=tags,
                     cover=cover,
-                    rating=book.rating,
-                    publishedDate=book.published_date,
+                    rating=int(round(book.rating)) if book.rating else 0,
+                    publishedDate=normalize_date(book.published_date),
                     series=book.series,
                 )
 

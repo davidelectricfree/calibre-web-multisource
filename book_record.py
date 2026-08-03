@@ -8,6 +8,24 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional
 
 
+def normalize_date(date_str: str) -> str:
+    """归一化日期为 YYYY-MM-DD"""
+    if not date_str or not date_str.strip():
+        return ""
+    date_str = date_str.strip()
+    if re.match(r'^\d{4}-\d{2}-\d{2}$', date_str):
+        return date_str
+    m = re.match(r'^(\d{4})-(\d{1,2})$', date_str)
+    if m:
+        return f"{m.group(1)}-{m.group(2).zfill(2)}-01"
+    m = re.match(r'^(\d{4})$', date_str)
+    if m:
+        return f"{m.group(1)}-01-01"
+    m = re.match(r'^(\d{4})\.(\d{1,2})$', date_str)
+    if m:
+        return f"{m.group(1)}-{m.group(2).zfill(2)}-01"
+    return date_str
+
 def normalize_text(text: str) -> str:
     """文本归一化：去标点、去空格、全角转半角、英文小写"""
     if not text:

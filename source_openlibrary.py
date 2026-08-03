@@ -10,7 +10,7 @@ import requests
 
 from . import proxy_manager
 from requests.adapters import HTTPAdapter
-from .book_record import BookRecord, canonical_isbn
+from .book_record import BookRecord, canonical_isbn, normalize_date, normalize_date
 
 
 # ============================================================
@@ -216,7 +216,7 @@ class OpenLibrarySource:
         # 出版日期
         pub_date = book_data.get("publish_date", "")
         if pub_date:
-            record.published_date = pub_date.strip()
+            record.published_date = normalize_date(pub_date.strip())
 
         # ISBN
         identifiers = book_data.get("identifiers", {})
@@ -311,7 +311,7 @@ class OpenLibrarySource:
 
         # 出版日期
         pub_years = doc.get("publish_year", [])
-        record.published_date = str(pub_years[0]) if pub_years else ""
+        record.published_date = normalize_date(str(pub_years[0])) if pub_years else ""
 
         # ISBN
         isbns = doc.get("isbn", [])

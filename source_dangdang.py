@@ -216,20 +216,4 @@ class DangdangSource:
 
     def _normalize_date(self, date_str: str) -> str:
         """标准化日期格式"""
-        date_str = date_str.strip()
-        # YYYY-MM 或 YYYY-MM-DD
-        if re.match(r'^\d{4}-\d{2}(-\d{2})?$', date_str):
-            return date_str
-        # YYYY.MM
-        m = re.match(r'^(\d{4})\.(\d{1,2})$', date_str)
-        if m:
-            return f"{m.group(1)}-{m.group(2).zfill(2)}"
-        # YYYY年MM月
-        m = re.match(r'^(\d{4})年(\d{1,2})月', date_str)
-        if m:
-            return f"{m.group(1)}-{m.group(2).zfill(2)}"
-        # YYYY
-        m = re.match(r'^(\d{4})$', date_str)
-        if m:
-            return date_str
-        return date_str
+        return normalize_date(date_str)

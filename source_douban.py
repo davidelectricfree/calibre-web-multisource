@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 from lxml import etree
 
-from .book_record import BookRecord
+from .book_record import BookRecord, normalize_date
 
 
 # ============================================================
@@ -105,7 +105,7 @@ class DoubanSource:
                 if not rec.publisher and basic.get("publisher"):
                     rec.publisher = basic["publisher"]
                 if not rec.published_date and basic.get("year"):
-                    rec.published_date = basic["year"]
+                    rec.published_date = normalize_date(basic.get("year", ""))
                 if not rec.cover_url and basic.get("cover"):
                     rec.cover_url = basic["cover"]
                 if not rec.rating and basic.get("rating"):
@@ -121,7 +121,7 @@ class DoubanSource:
                         title=e.get("title", ""),
                         authors=[e["author"]] if e.get("author") else [],
                         publisher=e.get("publisher", ""),
-                        published_date=e.get("year", ""),
+                        published_date=normalize_date(e.get("year", "")),
                         cover_url=e.get("cover", ""),
                         rating=e.get("rating", 0.0),
                     )
@@ -364,7 +364,7 @@ class DoubanBookHtmlParser:
                         if date_match:
                             record.published_date = f"{date_match.group(1)}-{date_match.group(2)}-01"
                         else:
-                            record.published_date = date_str
+                            record.published_date = normalize_date(date_str)
 
                 elif text.startswith("丛书"):
                     sibling = elem.getnext()
