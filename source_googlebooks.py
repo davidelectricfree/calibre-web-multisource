@@ -9,6 +9,7 @@ import requests
 from typing import List, Optional
 
 from . import proxy_manager
+from requests.adapters import HTTPAdapter
 from .book_record import BookRecord, canonical_isbn
 
 # ============================================================
@@ -42,6 +43,9 @@ class GoogleBooksSource:
 
     def __init__(self, api_key: str = ""):
         self._api_key = api_key or GB_API_KEY
+        self._session = requests.Session()
+        self._session.mount("https://", HTTPAdapter(max_retries=0))
+        self._session.mount("http://", HTTPAdapter(max_retries=0))
 
     def _read_apikey_file(self) -> str:
         """从插件目录的 googlebooks_apikey.txt 读取 API Key（无需重启容器即可更新）"""
@@ -138,14 +142,14 @@ class GoogleBooksSource:
     def _fetch_json(self, url: str, params: dict) -> Optional[dict]:
         """获取 JSON 数据"""
         try:
-            resp = requests.get(url, params=params, headers=GB_HEADERS,
+            resp = self._session.get(url, params=params, headers=GB_HEADERS,
                                 timeout=GB_TIMEOUT, proxies=_get_proxies(), verify=False)
             if resp.status_code == 200:
                 return resp.json()
             elif resp.status_code == 429:
                 print(f"[GoogleBooks] 被限速 (429)，等待 1 秒后重试...")
                 time.sleep(1)
-                resp = requests.get(url, params=params, headers=GB_HEADERS,
+                resp = self._session.get(url, params=params, headers=GB_HEADERS,
                                     timeout=GB_TIMEOUT, proxies=_get_proxies(), verify=False)
                 if resp.status_code == 200:
                     return resp.json()

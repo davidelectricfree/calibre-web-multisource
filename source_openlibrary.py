@@ -9,6 +9,7 @@ from typing import List, Optional
 import requests
 
 from . import proxy_manager
+from requests.adapters import HTTPAdapter
 from .book_record import BookRecord, canonical_isbn
 
 
@@ -18,6 +19,7 @@ from .book_record import BookRecord, canonical_isbn
 OL_BOOKS_API = "https://openlibrary.org/api/books"
 OL_SEARCH_API = "https://openlibrary.org/search.json"
 OL_TIMEOUT = 10
+OL_BATCH_SIZE = 20  # max ISBNs per batch request
 
 OL_HEADERS = {
     "User-Agent": (
@@ -38,6 +40,11 @@ def _get_proxies():
 class OpenLibrarySource:
     SOURCE_ID = "openlibrary"
     SOURCE_NAME = "Open Library"
+
+    def __init__(self):
+        self._session = requests.Session()
+        self._session.mount("https://", HTTPAdapter(max_retries=0))
+        self._session.mount("http://", HTTPAdapter(max_retries=0))
 
     def search(self, query: str, is_isbn: bool = False) -> List[BookRecord]:
         if is_isbn:
@@ -72,6 +79,54 @@ class OpenLibrarySource:
 
         return []
 
+    def search_by_isbns(self, isbn_list: list) -> List[BookRecord]:
+        """批量查询多个 ISBN（一次请求最多查 20 个）"""
+        all_records = []
+        for i in range(0, len(isbn_list), OL_BATCH_SIZE):
+            batch = isbn_list[i:i + OL_BATCH_SIZE]
+            clean_list = []
+            for isbn in batch:
+                clean = canonical_isbn(isbn)
+                if not clean:
+                    clean = str(isbn).strip().replace("-", "")
+                if clean:
+                    clean_list.append(clean)
+            if not clean_list:
+                continue
+            bibkey_str = ",".join(f"ISBN:{c}" for c in clean_list)
+            params = {"bibkeys": bibkey_str, "format": "json", "jscmd": "data"}
+            try:
+                t0 = __import__('time').time()
+                data = self._fetch_json(OL_BOOKS_API, params)
+                print(f'[OpenLibrary] Batch fetch took {__import__(chr(116)+chr(105)+chr(109)+chr(101)).time()-t0:.1f}s, data={data is not None}, params_len={len(bibkey_str)}')
+                if data:
+                    for c in clean_list:
+                        key = f"ISBN:{c}"
+                        if key in data:
+                            record = self._parse_book(data[key], isbn=c)
+                            if record and record.title:
+                                all_records.append(record)
+            except Exception as e:
+                print(f"[OpenLibrary] 批量 ISBN 查询失败: {e}")
+        return all_records
+
+    def _fetch_descriptions_concurrent(self, work_keys: list) -> dict:
+        """并发获取多个 work 的简介（解决搜索结果串行 HTTP 瓶颈）"""
+        if not work_keys:
+            return {}
+        descriptions = {}
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            futures = {pool.submit(self._fetch_work_description_by_key, k): k
+                       for k in work_keys if k}
+            for future in as_completed(futures):
+                k = futures[future]
+                try:
+                    descriptions[k] = future.result(timeout=OL_TIMEOUT)
+                except Exception:
+                    descriptions[k] = ""
+        return descriptions
+
     def _search_by_title(self, title: str) -> List[BookRecord]:
         """通过标题搜索"""
         params = {
@@ -86,9 +141,13 @@ class OpenLibrarySource:
             if not data or "docs" not in data:
                 return []
 
+            # 收集 work_keys 并并发取简介
+            work_keys = [d.get("key", "") for d in data["docs"][:10]]
+            descriptions = self._fetch_descriptions_concurrent(work_keys)
+
             records = []
             for doc in data["docs"][:10]:
-                record = self._parse_search_doc(doc)
+                record = self._parse_search_doc(doc, descriptions)
                 if record and record.title:
                     records.append(record)
 
@@ -97,8 +156,10 @@ class OpenLibrarySource:
                 params2 = {"q": title, "limit": 10}
                 data2 = self._fetch_json(OL_SEARCH_API, params2)
                 if data2 and "docs" in data2:
+                    work_keys2 = [d.get("key", "") for d in data2["docs"][:10]]
+                    descriptions.update(self._fetch_descriptions_concurrent(work_keys2))
                     for doc in data2["docs"][:10]:
-                        record = self._parse_search_doc(doc)
+                        record = self._parse_search_doc(doc, descriptions)
                         if record and record.title:
                             if not any(r.title == record.title for r in records):
                                 records.append(record)
@@ -113,7 +174,7 @@ class OpenLibrarySource:
     def _fetch_json(self, url: str, params: dict) -> Optional[dict]:
         """获取 JSON 数据（优先走代理，因为 NAS 无法直连 openlibrary.org）"""
         try:
-            resp = requests.get(url, params=params, headers=OL_HEADERS,
+            resp = self._session.get(url, params=params, headers=OL_HEADERS,
                                 timeout=OL_TIMEOUT, proxies=_get_proxies(), verify=False)
             if resp.status_code == 200:
                 return resp.json()
@@ -220,7 +281,7 @@ class OpenLibrarySource:
 
         return record
 
-    def _parse_search_doc(self, doc: dict) -> Optional[BookRecord]:
+    def _parse_search_doc(self, doc: dict, descriptions: dict = None) -> Optional[BookRecord]:
         """解析 /search.json 返回的搜索结果项"""
         record = BookRecord(
             source_id=self.SOURCE_ID,
@@ -274,9 +335,13 @@ class OpenLibrarySource:
         record.tags = [s.strip() for s in subjects[:20] if s]
 
         # 简介（search API 不直接返回，通过 work key 二级查询）
+        # 优先用预取的并发结果，fallback 到同步请求
         work_key = doc.get("key", "")
         if work_key:
-            record.description = self._fetch_work_description_by_key(work_key)
+            if descriptions and work_key in descriptions:
+                record.description = descriptions[work_key]
+            else:
+                record.description = self._fetch_work_description_by_key(work_key)
 
         # 封面
         cover_id = doc.get("cover_i")

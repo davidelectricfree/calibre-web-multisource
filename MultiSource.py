@@ -91,7 +91,8 @@ CASCADE_ENABLED = True       # 是否启用 ISBN 级联
 CASCADE_OPENLIBRARY = True   # 级联查询 OpenLibrary ISBN
 CASCADE_GOOGLE_BOOKS = True  # 级联查询 Google Books（需网络可达）
 GOOGLE_BOOKS_AS_SOURCE = True   # Google Books 是否作为常规源参与书名搜索
-CASCADE_TIMEOUT = 10         # ISBN 级联超时（比书名搜索稍长）
+CASCADE_TIMEOUT = 5          # ISBN 级联超时（秒）
+CASCADE_LIMIT_GOOGLE = 10  # Google Books 单次级联最多 ISBN 数
 
 # 最大并发源查询数
 SOURCE_TIMEOUT = 8   # 单源超时（秒）
@@ -279,27 +280,32 @@ class MultiSource(Metadata):
         return isbns
 
     def _query_isbn_cascade(self, isbns: List[str]) -> List[BookRecord]:
-        """用 ISBN 并行查询所有级联源"""
+        """用 ISBN 查询级联源：OpenLibrary 批量、Google Books 限流"""
         all_records = []
 
-        with ThreadPoolExecutor(max_workers=len(self._cascade_sources) * 2) as pool:
+        with ThreadPoolExecutor(max_workers=len(self._cascade_sources) + 5) as pool:
             futures = {}
-            for isbn in isbns:
-                for source in self._cascade_sources:
-                    future = pool.submit(source.search, isbn, True)
-                    futures[future] = (source, isbn)
+            for source in self._cascade_sources:
+                if hasattr(source, 'search_by_isbns'):
+                    # OpenLibrary: 批量查询所有 ISBN（支持最多 20 个/请求）
+                    future = pool.submit(source.search_by_isbns, isbns)
+                    futures[future] = source.SOURCE_NAME
+                else:
+                    # Google Books: 逐个但限制数量
+                    limited = isbns[:CASCADE_LIMIT_GOOGLE]
+                    for isbn in limited:
+                        future = pool.submit(source.search, isbn, True)
+                        futures[future] = f"{source.SOURCE_NAME}({isbn})"
 
             for future in as_completed(futures):
-                source, isbn = futures[future]
+                label = futures[future]
                 try:
                     records = future.result(timeout=CASCADE_TIMEOUT)
                     if records:
-                        log.info(f"[MultiSource] {source.SOURCE_NAME} "
-                                 f"ISBN={isbn}: {len(records)} 条")
+                        log.info(f"[MultiSource] {label}: {len(records)} 条")
                         all_records.extend(records)
                 except Exception as e:
-                    log.error(f"[MultiSource] {source.SOURCE_NAME} "
-                              f"ISBN={isbn} 级联失败: {e}")
+                    log.error(f"[MultiSource] {label} 级联失败: {e}")
 
         return all_records
 
