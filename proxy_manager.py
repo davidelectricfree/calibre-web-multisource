@@ -93,3 +93,49 @@ def _check_port(name, url):
         return result == 0
     except Exception:
         return False
+
+
+def probe_best_proxy(target_url="https://openlibrary.org/search.json?q=test&limit=1",
+                     timeout=5):
+    """测试直连、xray、clash 的延迟，返回最优代理配置
+    返回: (proxies_dict, name) 或 (None, "direct")
+    """
+    import requests
+    import time
+
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json",
+    }
+    _PROBE_PROXY_LIST = [
+        ("direct", None),
+        ("xray", {"http": "http://192.168.1.249:20172", "https": "http://192.168.1.249:20172"}),
+        ("clash", {"http": "http://192.168.1.249:17890", "https": "http://192.168.1.249:17890"}),
+    ]
+
+    results = []
+    for name, px in _PROBE_PROXY_LIST:
+        t0 = time.time()
+        try:
+            r = requests.get(target_url, params={}, headers=headers,
+                             proxies=px, verify=False, timeout=timeout)
+            if r.status_code == 200:
+                latency = time.time() - t0
+                results.append((latency, name, px))
+        except Exception:
+            pass
+
+    if not results:
+        # 全部不通，fallback 到 xray
+        return ({"http": "http://192.168.1.249:20172", "https": "http://192.168.1.249:20172"}, "xray")
+
+    # 延迟排序，取最快
+    results.sort(key=lambda x: x[0])
+    best_latency, best_name, best_px = results[0]
+
+    # 如果直连和最快代理差距在 1s 内，优先直连
+    direct_result = next((r for r in results if r[1] == "direct"), None)
+    if direct_result and direct_result[0] <= best_latency + 1.0:
+        return (None, "direct")
+
+    return (best_px, best_name)

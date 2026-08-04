@@ -9,6 +9,7 @@ import requests
 from typing import List, Optional
 
 from . import proxy_manager
+from .proxy_manager import probe_best_proxy
 from requests.adapters import HTTPAdapter
 from .book_record import BookRecord, canonical_isbn, normalize_date, normalize_date
 
@@ -40,6 +41,9 @@ class GoogleBooksSource:
 
     SOURCE_ID = "googlebooks"
     SOURCE_NAME = "Google Books"
+
+    _proxies_cache = None
+    _proxies_cache_name = ""
 
     def __init__(self, api_key: str = ""):
         self._api_key = api_key or GB_API_KEY
@@ -103,7 +107,7 @@ class GoogleBooksSource:
         params = {
             "q": f'intitle:"{title}"',
             "langRestrict": "zh-CN",
-            "maxResults": min(GB_MAX_RESULTS, 10),
+            "maxResults": min(GB_MAX_RESULTS, 20),
             "printType": "books",
         }
         _api_key = self._get_api_key()
@@ -116,7 +120,7 @@ class GoogleBooksSource:
             time.sleep(0.3)  # 友好限速
             data = self._fetch_json(GB_SEARCH_API, params)
             if data and "items" in data:
-                for item in data["items"][:10]:
+                for item in data["items"][:20]:
                     record = self._parse_volume(item)
                     if record and record.title:
                         records.append(record)
@@ -126,13 +130,13 @@ class GoogleBooksSource:
                 params["langRestrict"] = ""
                 data2 = self._fetch_json(GB_SEARCH_API, params)
                 if data2 and "items" in data2:
-                    for item in data2["items"][:10]:
+                    for item in data2["items"][:20]:
                         record = self._parse_volume(item)
                         if record and record.title:
                             if not any(r.title == record.title for r in records):
                                 records.append(record)
 
-            return records[:10]
+            return records[:20]
 
         except Exception as e:
             print(f"[GoogleBooks] 标题搜索失败: {e}")
@@ -143,14 +147,14 @@ class GoogleBooksSource:
         """获取 JSON 数据"""
         try:
             resp = self._session.get(url, params=params, headers=GB_HEADERS,
-                                timeout=GB_TIMEOUT, proxies=_get_proxies(), verify=False)
+                                timeout=GB_TIMEOUT, proxies=self._get_best_proxies(), verify=False)
             if resp.status_code == 200:
                 return resp.json()
             elif resp.status_code == 429:
                 print(f"[GoogleBooks] 被限速 (429)，等待 1 秒后重试...")
                 time.sleep(1)
                 resp = self._session.get(url, params=params, headers=GB_HEADERS,
-                                    timeout=GB_TIMEOUT, proxies=_get_proxies(), verify=False)
+                                    timeout=GB_TIMEOUT, proxies=self._get_best_proxies(), verify=False)
                 if resp.status_code == 200:
                     return resp.json()
             elif resp.status_code != 200:
@@ -158,6 +162,13 @@ class GoogleBooksSource:
         except Exception as e:
             print(f"[GoogleBooks] JSON 请求失败 {url}: {e}")
         return None
+
+    def _get_best_proxies(self):
+        if self._proxies_cache is None:
+            px, name = probe_best_proxy()
+            self._proxies_cache = px
+            self._proxies_cache_name = name
+        return self._proxies_cache
 
     def _parse_volume(self, item: dict, isbn: str = "") -> Optional[BookRecord]:
         """解析 Google Books API 返回的 volume"""
@@ -235,7 +246,7 @@ class GoogleBooksSource:
 
         # 分类/标签
         categories = info.get("categories", [])
-        record.tags = [c.strip() for c in categories[:10] if c]
+        record.tags = [c.strip() for c in categories[:20] if c]
 
         # URL
         record.url = info.get("infoLink", "") or info.get("canonicalVolumeLink", "")
