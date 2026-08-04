@@ -22,10 +22,7 @@ OL_TIMEOUT = 10
 OL_BATCH_SIZE = 20  # max ISBNs per batch request
 
 OL_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    ),
+    "User-Agent": "CalibreWeb-MultiSource/1.0 (davidelectricfree@gmail.com)",
     "Accept": "application/json",
 }
 

@@ -15,7 +15,7 @@ import time
 import urllib.parse
 import urllib.request
 import ssl
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait, ALL_COMPLETED
 from typing import List
 
 import requests
@@ -102,6 +102,7 @@ PROXY_DOUBAN_COVER = True
 DOUBAN_COVER_PROXY_HOST = ""  # 空 = 自动使��当前 host
 DOUBAN_COVER_PROXY_PATH = "metadata/douban_cover?cover="
 DOUBAN_COVER_DOMAIN = "doubanio.com"
+EXTERNAL_COVER_DOMAINS = {"doubanio.com", "books.google.com", "covers.openlibrary.org"}  # 封面需要走代理的域名
 
 
 
@@ -279,6 +280,8 @@ class MultiSource(Metadata):
                 isbns.append(isbn)
         return isbns
 
+    CASCADE_WAIT = 15  # 级联全局超时(秒)
+
     def _query_isbn_cascade(self, isbns: List[str]) -> List[BookRecord]:
         """用 ISBN 查询级联源：OpenLibrary 批量、Google Books 限流"""
         all_records = []
@@ -297,15 +300,20 @@ class MultiSource(Metadata):
                         future = pool.submit(source.search, isbn, True)
                         futures[future] = f"{source.SOURCE_NAME}({isbn})"
 
-            for future in as_completed(futures):
+            done, not_done = wait(futures.keys(), timeout=self.CASCADE_WAIT,
+                                   return_when=ALL_COMPLETED)
+            for future in done:
                 label = futures[future]
                 try:
-                    records = future.result(timeout=CASCADE_TIMEOUT)
+                    records = future.result(timeout=0)
                     if records:
                         log.info(f"[MultiSource] {label}: {len(records)} 条")
                         all_records.extend(records)
                 except Exception as e:
                     log.error(f"[MultiSource] {label} 级联失败: {e}")
+            for future in not_done:
+                label = futures[future]
+                log.warning(f"[MultiSource] {label} 级联超时({self.CASCADE_WAIT}s)，跳过")
 
         return all_records
 
@@ -336,9 +344,9 @@ class MultiSource(Metadata):
                     identifiers["series"] = book.series
                 if book.series_index:
                     try:
-                    identifiers["series_index"] = int(float(book.series_index))
-                except (ValueError, TypeError):
-                    pass
+                        identifiers["series_index"] = int(float(book.series_index))
+                    except (ValueError, TypeError):
+                        pass
 
                 # 合并 note 到标题
                 title = _sanitize_author(book.title)
@@ -362,7 +370,7 @@ class MultiSource(Metadata):
 
                 # 处理封面
                 cover = book.cover_url
-                if cover and PROXY_DOUBAN_COVER and DOUBAN_COVER_DOMAIN in cover:
+                if cover and PROXY_DOUBAN_COVER and _is_external_cover(cover):
                     pass  # cover 代理在 save 时处理
 
                 record_id = book.isbn or str(hash(book.title))[:16]
@@ -414,7 +422,7 @@ class MultiSource(Metadata):
 
             def new_save_cover(url, book_path):
                 nonlocal save_cover
-                if DOUBAN_COVER_DOMAIN in url:
+                if _is_external_cover(url):
                     if PROXY_DOUBAN_COVER:
                         parsed = urllib.parse.urlparse(url)
                         qs = urllib.parse.parse_qs(parsed.query)
@@ -431,13 +439,17 @@ class MultiSource(Metadata):
             log.error(f"[MultiSource] 封面代理安装失败（可忽略）: {e}")
 
 
+def _is_external_cover(url):
+    return any(d in url for d in EXTERNAL_COVER_DOMAINS)
+
+
 class MultiSourceMetaRecord(MetaRecord):
     """扩展 MetaRecord，支持封面代理"""
 
     def __getattribute__(self, item):
         if item == "cover" and PROXY_DOUBAN_COVER:
             cover_url = super().__getattribute__(item)
-            if cover_url and DOUBAN_COVER_DOMAIN in cover_url:
+            if cover_url and _is_external_cover(cover_url):
                 try:
                     host = DOUBAN_COVER_PROXY_HOST
                     if not host:
