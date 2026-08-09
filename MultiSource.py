@@ -48,6 +48,8 @@ from .source_douban import DoubanSource
 from .source_nlc import NLCSource
 from .source_openlibrary import OpenLibrarySource
 from .source_dangdang import DangdangSource
+from .source_health import CircuitBreaker
+from . import source_health
 
 # WeRead 可选导入
 try:
@@ -105,6 +107,9 @@ SOURCE_RETRY_ENABLED = False   # 禁用自动重试，避免单源消耗 4+1+4=9
 ZH_SKIP_OPENLIBRARY = True     # 中文书名搜索跳过 OpenLibrary（总是 0 结果，耗时 4-31s）
 ZH_SKIP_GOOGLEBOOKS = True     # 中文书名搜索跳过 Google Books（中文覆盖有限，耗时 2-9s）
 
+# Phase 4: 源熔断器 — 连续失败自动跳过，避免每次都等到超时
+SOURCE_CIRCUIT_BREAKER_ENABLED = True
+
 # 封面代理（解决豆瓣防盗链）
 PROXY_DOUBAN_COVER = True
 DOUBAN_COVER_PROXY_HOST = ""  # 空 = 自动使��当前 host
@@ -161,6 +166,9 @@ class MultiSource(Metadata):
         # 安装封面代理
         self._hack_cover_proxy()
 
+        # Phase 4: 源熔断器
+        self.circuit_breaker = CircuitBreaker() if SOURCE_CIRCUIT_BREAKER_ENABLED else None
+
         super().__init__()
         log.info(f"[MultiSource] 初始化完成，启用的源: "
                  f"{[s.SOURCE_NAME for s in self.sources]}")
@@ -208,6 +216,19 @@ class MultiSource(Metadata):
                     skipped_names.append("Google Books")
                 if skipped_names:
                     log.info(f"[MultiSource][{request_id}] 中文搜索跳过: {', '.join(skipped_names)}")
+
+            # ---- Phase 4: 熔断器过滤 ----
+            if self.circuit_breaker:
+                cb_skipped = []
+                filtered = []
+                for s in phase1_sources:
+                    if self.circuit_breaker.should_skip(s.SOURCE_ID):
+                        cb_skipped.append(s.SOURCE_NAME)
+                    else:
+                        filtered.append(s)
+                if cb_skipped:
+                    log.info(f"[MultiSource][{request_id}] 熔断器跳过: {cb_skipped}")
+                phase1_sources = filtered
 
             log.info(f"[MultiSource][{request_id}] query='{query}'"
                      f" type={query_type} start 代理={_px_info}"
@@ -321,9 +342,25 @@ class MultiSource(Metadata):
                              f" count={source_count} retry={retries}")
                     if records:
                         all_records.extend(records)
+                    # Phase 4: 记录成功/失败到熔断器
+                    if self.circuit_breaker:
+                        if status == "ok":
+                            self.circuit_breaker.record_success(source.SOURCE_ID)
+                        else:
+                            opened = self.circuit_breaker.record_failure(source.SOURCE_ID)
+                            if opened:
+                                log.warning(f"[MultiSource] {source.SOURCE_NAME}"
+                                            f" 熔断器打开 — 连续失败 {source_health.SOURCE_FAILURE_THRESHOLD} 次"
+                                            f"，跳过 {source_health.SOURCE_COOLDOWN_SECONDS}s")
                 except Exception as e:
                     log.error(f"[MultiSource][{request_id}] source={source.SOURCE_NAME}"
                               f" status=error error={e}")
+                    # Phase 4: 异常也计入失败
+                    if self.circuit_breaker:
+                        opened = self.circuit_breaker.record_failure(source.SOURCE_ID)
+                        if opened:
+                            log.warning(f"[MultiSource] {source.SOURCE_NAME}"
+                                        f" 熔断器打开 — 连续失败 {source_health.SOURCE_FAILURE_THRESHOLD} 次")
 
             # 日志记录因预算耗尽被跳过的源
             for future in not_done:
