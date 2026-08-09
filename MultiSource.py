@@ -96,6 +96,7 @@ CASCADE_GOOGLE_BOOKS = True  # 级联查询 Google Books（需网络可达）
 GOOGLE_BOOKS_AS_SOURCE = True   # Google Books 是否作为常规源参与书名搜索
 CASCADE_TIMEOUT = 5          # ISBN 级联超时（秒）
 CASCADE_LIMIT_GOOGLE = 10  # Google Books 单次级联最多 ISBN 数
+CASCADE_MAX_RECORDS = 3      # Phase 5: 只级联 top N 个 ISBN 候选
 
 # Phase 1: 搜索预算
 SEARCH_BUDGET_SECONDS = 6      # Phase1 全局等待上限（秒）
@@ -250,9 +251,11 @@ class MultiSource(Metadata):
             if not is_isbn and self._cascade_sources:
                 isbns = self._extract_isbns(all_records)
                 if isbns:
+                    limited_isbns = isbns[:CASCADE_MAX_RECORDS]
                     log.info(f"[MultiSource][{request_id}] cascade start"
-                             f" candidates={len(isbns)}")
-                    phase2_records = self._query_isbn_cascade(isbns, request_id)
+                             f" candidates={len(isbns)}"
+                             f" -> limited={len(limited_isbns)}")
+                    phase2_records = self._query_isbn_cascade(limited_isbns, request_id)
                     if phase2_records:
                         log.info(f"[MultiSource][{request_id}] cascade done"
                                  f" new={len(phase2_records)}")
@@ -417,8 +420,6 @@ class MultiSource(Metadata):
                 isbns.append(isbn)
         return isbns
 
-    CASCADE_WAIT = 15  # 级联全局超时(秒)
-
     def _query_isbn_cascade(self, isbns: List[str], request_id: str) -> List[BookRecord]:
         """用 ISBN 查询级联源：OpenLibrary 批量、Google Books 限流"""
         all_records = []
@@ -440,7 +441,7 @@ class MultiSource(Metadata):
                         futures[future] = f"{source.SOURCE_NAME}({isbn})"
                         started_at[future] = time.time()
 
-            done, not_done = wait(futures.keys(), timeout=self.CASCADE_WAIT,
+            done, not_done = wait(futures.keys(), timeout=CASCADE_TIMEOUT,
                                    return_when=ALL_COMPLETED)
             for future in done:
                 label = futures[future]
@@ -454,7 +455,7 @@ class MultiSource(Metadata):
                     log.error(f"[MultiSource][{request_id}] {label} 级联失败: {e}")
             for future in not_done:
                 label = futures[future]
-                log.warning(f"[MultiSource][{request_id}] {label} 级联超时({self.CASCADE_WAIT}s)，跳过")
+                log.warning(f"[MultiSource][{request_id}] {label} 级联超时({CASCADE_TIMEOUT}s)，跳过")
 
         return all_records
 

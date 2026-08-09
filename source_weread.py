@@ -17,7 +17,7 @@ from .book_record import BookRecord, canonical_isbn
 WEREAD_TIMEOUT = 8   # 查询超时（秒）
 WEREAD_MAX_RESULTS = 10  # 最多返回条数
 WEREAD_DETAIL_WORKERS = 3  # 并行获取详情的线程数
-WEREAD_DETAIL_LIMIT = 5  # 最多获取多少本书的详情
+WEREAD_DETAIL_LIMIT = 3  # 最多获取多少本书的详情 (Phase 5: 5→3)
 
 WEREAD_GATEWAY = "https://i.weread.qq.com/api/agent/gateway"
 WEREAD_SKILL_VERSION = "1.0.4"
