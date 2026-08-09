@@ -602,7 +602,7 @@ class MultiSource(Metadata):
 
     # ---- 封面代理 ----
     def _hack_cover_proxy(self):
-        """安装封面代理以解决豆瓣防盗链"""
+        """安装封面代理以解决豆瓣防盗链。豆瓣封面直连 + 带 Cookie/Referer。"""
         try:
             h = _get_helper()
             save_cover = h.save_cover_from_url
@@ -616,8 +616,9 @@ class MultiSource(Metadata):
                         cover_url = urllib.parse.unquote(qs.get("cover", [url])[0])
                     else:
                         cover_url = url
-                    resp = requests.get(cover_url, headers=DEFAULT_HEADERS,
-                                       timeout=15)
+                    headers, proxies = _get_cover_request_params(cover_url)
+                    resp = requests.get(cover_url, headers=headers,
+                                       timeout=15, proxies=proxies)
                     return h.save_cover(resp, book_path)
                 return save_cover(url, book_path)
 
@@ -628,6 +629,30 @@ class MultiSource(Metadata):
 
 def _is_external_cover(url):
     return any(d in url for d in EXTERNAL_COVER_DOMAINS)
+
+
+def _get_cover_request_params(cover_url: str):
+    """获取封面下载的 headers 和 proxies。
+    豆瓣封面: 直连(不走全局代理) + Cookie + Referer（参考 fugary/calibre-douban）。
+    其他外部封面: 使用容器默认代理。
+    """
+    headers = dict(DEFAULT_HEADERS)
+    proxies = None  # None = 使用容器默认代理
+
+    if "doubanio.com" in cover_url:
+        proxies = {"http": None, "https": None}  # 直连，不被豆瓣检测到代理 IP
+        headers["Referer"] = "https://book.douban.com/"
+        cookie_path = os.path.join(os.path.dirname(__file__), "douban_cookie.txt")
+        if os.path.exists(cookie_path):
+            try:
+                with open(cookie_path, "r", encoding="utf-8") as f:
+                    cookie = f.read().strip()
+                    if cookie:
+                        headers["Cookie"] = cookie
+            except Exception:
+                pass
+
+    return headers, proxies
 
 
 class MultiSourceMetaRecord(MetaRecord):
@@ -658,12 +683,13 @@ try:
 
     @meta.route("/metadata/douban_cover", methods=["GET"])
     def proxy_douban_cover():
-        """代理豆瓣封面"""
+        """代理外部封面。豆瓣封面直连(不走全局代理) + Cookie + Referer。"""
         cover_url = urllib.parse.unquote(request.args.get("cover", ""))
         if not cover_url:
             return Response("", status=400)
-        resp = requests.get(cover_url, headers=DEFAULT_HEADERS,
-                           timeout=15)
+        headers, proxies = _get_cover_request_params(cover_url)
+        resp = requests.get(cover_url, headers=headers,
+                           timeout=15, proxies=proxies)
         return Response(resp.content, mimetype=resp.headers.get("Content-Type", "image/jpeg"))
 
 except ImportError:
