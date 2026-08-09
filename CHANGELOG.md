@@ -13,7 +13,11 @@ All notable changes to Calibre-Web MultiSource.
 - Budget timeouts (not_done) NOT counted as failures
 - Rollback: set `SOURCE_CIRCUIT_BREAKER_ENABLED = False`
 
-### Phase 3: (Skipped)
+### Phase 5: Cascade & Enrichment Limiting
+- **Added** `CASCADE_MAX_RECORDS` = 3 (only cascade top 3 ISBNs)
+- **Fixed** `CASCADE_WAIT=15` class attribute bug — now uses module-level `CASCADE_TIMEOUT=5`
+- **Changed** `WEREAD_DETAIL_LIMIT`: 5 → 3
+- Cascade 60-100s reduced to ≤5s
 - In-memory cache skipped — low single-user usage, near-zero cache hit rate
 
 ### Phase 2: Query Classification & Source Tiers

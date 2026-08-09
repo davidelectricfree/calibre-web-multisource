@@ -65,6 +65,7 @@ CASCADE_ENABLED = True
 CASCADE_OPENLIBRARY = True
 CASCADE_TIMEOUT = 5
 CASCADE_LIMIT_GOOGLE = 10
+CASCADE_MAX_RECORDS = 3          # Phase 5: 最多级联 N 个 ISBN
 
 # 搜索预算 (Phase 1)
 SEARCH_BUDGET_SECONDS = 6           # Phase1 全局等待上限

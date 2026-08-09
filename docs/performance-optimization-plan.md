@@ -1,6 +1,6 @@
 # Calibre-Web MultiSource Search Performance Optimization Plan
 
-> **Implementation Status**: Phase 0 ✅ | Phase 1 ✅ | Phase 2 ✅ | Phase 3 ⏭️ skipped | Phase 4 ✅ | Phase 5 next
+> **Implementation Status**: Phase 0 ✅ | Phase 1 ✅ | Phase 2 ✅ | Phase 3 ⏭️ | Phase 4 ✅ | Phase 5 ✅ — ALL DONE
 
 ## Background
 
@@ -291,10 +291,10 @@ This must be verified against Calibre-Web behavior before implementation.
 
 The first coding pass should be small and high-impact:
 
-1. Add performance baseline logs.
-2. Add `SEARCH_BUDGET_SECONDS` and stop waiting for slow sources.
-3. Add query classification and Chinese-source plan.
-4. Limit cascade and WeRead detail enrichment.
+1. Add performance baseline logs. ✅
+2. Add `SEARCH_BUDGET_SECONDS` and stop waiting for slow sources. ✅
+3. Add query classification and Chinese-source plan. ✅
+4. Limit cascade and WeRead detail enrichment. ✅
 
 Do not implement persistent cache or large module extraction in the first pass.
 
