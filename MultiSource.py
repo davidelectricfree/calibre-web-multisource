@@ -101,6 +101,10 @@ FAST_RESULT_MIN_COUNT = 5      # 结果足够时可提前进入 merge
 SOURCE_TIMEOUT = 4             # 单源超时（秒）
 SOURCE_RETRY_ENABLED = False   # 禁用自动重试，避免单源消耗 4+1+4=9s 超出预算
 
+# Phase 2: 源分类与选择 — 中文搜索跳过对中文支持差/慢的外部源
+ZH_SKIP_OPENLIBRARY = True     # 中文书名搜索跳过 OpenLibrary（总是 0 结果，耗时 4-31s）
+ZH_SKIP_GOOGLEBOOKS = True     # 中文书名搜索跳过 Google Books（中文覆盖有限，耗时 2-9s）
+
 # 封面代理（解决豆瓣防盗链）
 PROXY_DOUBAN_COVER = True
 DOUBAN_COVER_PROXY_HOST = ""  # 空 = 自动使��当前 host
@@ -189,11 +193,29 @@ class MultiSource(Metadata):
             # ---- 代理预热：提前检测链路，缓存结果 ----
             _proxies = proxy_manager.get_proxies()
             _px_info = proxy_manager.get_current_proxy_info()
+
+            # ---- Phase 2: 根据 query 类型选择源 ----
+            phase1_sources = self.sources
+            skipped_names = []
+            if query_type == "zh":
+                if ZH_SKIP_OPENLIBRARY:
+                    phase1_sources = [s for s in phase1_sources
+                                      if s.SOURCE_ID != "openlibrary"]
+                    skipped_names.append("OpenLibrary")
+                if ZH_SKIP_GOOGLEBOOKS:
+                    phase1_sources = [s for s in phase1_sources
+                                      if s.SOURCE_ID != "googlebooks"]
+                    skipped_names.append("Google Books")
+                if skipped_names:
+                    log.info(f"[MultiSource][{request_id}] 中文搜索跳过: {', '.join(skipped_names)}")
+
             log.info(f"[MultiSource][{request_id}] query='{query}'"
-                     f" type={query_type} start 代理={_px_info}")
+                     f" type={query_type} start 代理={_px_info}"
+                     f" sources={[s.SOURCE_NAME for s in phase1_sources]}")
 
             # ---- 阶段1: 并行查询所有源 ----
-            all_records = self._query_all_sources(query, is_isbn, request_id)
+            all_records = self._query_all_sources(query, is_isbn, request_id,
+                                                  sources=phase1_sources)
 
             if not all_records:
                 log.info(f"[MultiSource][{request_id}] 所有源返回空结果")
@@ -268,15 +290,18 @@ class MultiSource(Metadata):
             return "zh"
         return "en"
 
-    def _query_all_sources(self, query: str, is_isbn: bool, request_id: str) -> List[BookRecord]:
+    def _query_all_sources(self, query: str, is_isbn: bool, request_id: str,
+                           sources: List = None) -> List[BookRecord]:
         """并行查询所有启用的数据源。SEARCH_BUDGET_SECONDS 内完成的源正常合并，超时源跳过。"""
+        if sources is None:
+            sources = self.sources
         all_records = []
         phase1_start = time.time()
 
-        with ThreadPoolExecutor(max_workers=len(self.sources)) as pool:
+        with ThreadPoolExecutor(max_workers=len(sources)) as pool:
             futures = {
                 pool.submit(self._query_source, source, query, is_isbn, request_id): source
-                for source in self.sources
+                for source in sources
             }
 
             # Phase 1: 用 wait() 替代 as_completed()，全局超时硬限制
