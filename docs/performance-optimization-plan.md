@@ -1,6 +1,6 @@
 # Calibre-Web MultiSource Search Performance Optimization Plan
 
-> **Implementation Status**: Phase 0 ✅ | Phase 1 ✅ | Phase 2 ✅ | Phase 3-5: planned
+> **Implementation Status**: Phase 0 ✅ | Phase 1 ✅ | Phase 2 ✅ | Phase 3 ⏭️ skipped | Phase 4 planned | Phase 5 next
 
 ## Background
 
@@ -183,6 +183,10 @@ ISBN query:
 - ✅ ISBN search is not degraded by Chinese-query shortcuts.
 
 ## Phase 3: Add In-Memory TTL Cache
+
+> **⏭️ Skipped (2026-08-09)**: Low usage frequency + single user = near-zero cache hit rate.
+> Phase 1+2 already reduced latency from 30-120s to 4-8s — sufficient for current usage.
+> Revisit if multi-user or higher search volume emerges.
 
 A large part of metadata search is repeated user interaction. A small in-process cache can remove repeated external calls.
 
