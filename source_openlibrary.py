@@ -11,7 +11,7 @@ import requests
 from . import proxy_manager
 from .proxy_manager import probe_best_proxy
 from requests.adapters import HTTPAdapter
-from .book_record import BookRecord, canonical_isbn, normalize_date, normalize_date
+from .book_record import BookRecord, canonical_isbn, normalize_date
 
 
 # ============================================================
@@ -21,6 +21,7 @@ OL_BOOKS_API = "https://openlibrary.org/api/books"
 OL_SEARCH_API = "https://openlibrary.org/search.json"
 OL_TIMEOUT = 10
 OL_BATCH_SIZE = 20  # max ISBNs per batch request
+PROXY_CACHE_SECONDS = 60
 
 OL_HEADERS = {
     "User-Agent": "CalibreWeb-MultiSource/1.0 (davidelectricfree@gmail.com)",
@@ -41,6 +42,7 @@ class OpenLibrarySource:
 
     _proxies_cache = None
     _proxies_cache_name = ""
+    _proxies_cache_checked_at = 0
 
     def __init__(self):
         self._session = requests.Session()
@@ -97,9 +99,7 @@ class OpenLibrarySource:
             bibkey_str = ",".join(f"ISBN:{c}" for c in clean_list)
             params = {"bibkeys": bibkey_str, "format": "json", "jscmd": "data"}
             try:
-                t0 = __import__('time').time()
                 data = self._fetch_json(OL_BOOKS_API, params)
-                print(f'[OpenLibrary] Batch fetch took {__import__(chr(116)+chr(105)+chr(109)+chr(101)).time()-t0:.1f}s, data={data is not None}, params_len={len(bibkey_str)}')
                 if data:
                     for c in clean_list:
                         key = f"ISBN:{c}"
@@ -186,12 +186,14 @@ class OpenLibrarySource:
         return None
 
     def _get_best_proxies(self):
-        """每次搜索时探测最佳代理路径"""
-        if self._proxies_cache is None:
+        """获取带 TTL 的最佳代理路径，避免一次探测结果永久固定。"""
+        now = time.time()
+        cache_expired = (now - self._proxies_cache_checked_at) >= PROXY_CACHE_SECONDS
+        if self._proxies_cache is None or cache_expired:
             px, name = probe_best_proxy()
             self._proxies_cache = px
             self._proxies_cache_name = name
-            # 不再打印每条日志，只在搜索入口记录一次
+            self._proxies_cache_checked_at = now
         return self._proxies_cache
 
     def _parse_book(self, book_data: dict, isbn: str = "") -> Optional[BookRecord]:

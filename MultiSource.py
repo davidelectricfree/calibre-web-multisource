@@ -15,6 +15,7 @@ import time
 import urllib.parse
 import urllib.request
 import ssl
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed, wait, ALL_COMPLETED
 from typing import List
 
@@ -174,6 +175,8 @@ class MultiSource(Metadata):
         if not query:
             return []
 
+        request_id = uuid.uuid4().hex[:8]
+
         try:
             # 判断是否为 ISBN 搜索
             is_isbn = self._is_isbn_query(query)
@@ -181,11 +184,11 @@ class MultiSource(Metadata):
             # ---- 代理预热：提前检测链路，缓存结果 ----
             _proxies = proxy_manager.get_proxies()
             _px_info = proxy_manager.get_current_proxy_info()
-            log.info(f"[MultiSource] 代理: {_px_info}")
+            log.info(f"[MultiSource][{request_id}] 代理: {_px_info}")
 
             # ---- 阶段1: 并行查询所有源 ----
-            log.info(f"[MultiSource] 阶段1: 搜索 '{query}' (is_isbn={is_isbn})")
-            all_records = self._query_all_sources(query, is_isbn)
+            log.info(f"[MultiSource][{request_id}] 阶段1: 搜索 '{query}' (is_isbn={is_isbn})")
+            all_records = self._query_all_sources(query, is_isbn, request_id)
 
             if not all_records:
                 log.info("[MultiSource] 所有源返回空结果")
@@ -196,22 +199,22 @@ class MultiSource(Metadata):
             if not is_isbn and self._cascade_sources:
                 isbns = self._extract_isbns(all_records)
                 if isbns:
-                    log.info(f"[MultiSource] 阶段2: ISBN 级联 {len(isbns)} 个 ISBN → "
+                    log.info(f"[MultiSource][{request_id}] 阶段2: ISBN 级联 {len(isbns)} 个 ISBN → "
                              f"{[s.SOURCE_NAME for s in self._cascade_sources]}")
-                    phase2_records = self._query_isbn_cascade(isbns)
+                    phase2_records = self._query_isbn_cascade(isbns, request_id)
                     if phase2_records:
-                        log.info(f"[MultiSource] 级联获得 {len(phase2_records)} 条新记录")
+                        log.info(f"[MultiSource][{request_id}] 级联获得 {len(phase2_records)} 条新记录")
                         all_records.extend(phase2_records)
 
             # 去重合并
             merged = self.matcher.merge(all_records)
-            log.info(f"[MultiSource] 合并后: {len(merged)} 条 (原始 {len(all_records)} 条)")
+            log.info(f"[MultiSource][{request_id}] 合并后: {len(merged)} 条 (原始 {len(all_records)} 条)")
 
             # 转换为 MetaRecord 列表
             return self._to_meta_records(merged)
 
         except Exception as e:
-            log.error(f"[MultiSource] 搜索异常: {e}", exc_info=True)
+            log.error(f"[MultiSource][{request_id}] 搜索异常: {e}", exc_info=True)
             return []
     # ---- 内部方法 ----
 
@@ -221,7 +224,7 @@ class MultiSource(Metadata):
         isbn = canonical_isbn(query)
         return len(isbn) in (10, 13)
 
-    def _query_all_sources(self, query: str, is_isbn: bool) -> List[BookRecord]:
+    def _query_all_sources(self, query: str, is_isbn: bool, request_id: str) -> List[BookRecord]:
         """并行查询所有启用的数据源"""
         all_records = []
 
@@ -233,26 +236,28 @@ class MultiSource(Metadata):
             for future in as_completed(futures):
                 source = futures[future]
                 try:
-                    records = future.result(timeout=SOURCE_TIMEOUT)
+                    records, elapsed = future.result(timeout=SOURCE_TIMEOUT)
+                    source_count = sum(
+                        1 for r in records
+                        if "__page_marker__" not in r.tags
+                    )
+                    log.info(f"[MultiSource][{request_id}] {source.SOURCE_NAME}: "
+                             f"{source_count} 条结果，耗时 {elapsed:.2f}s")
                     if records:
-                        source_count = sum(
-                            1 for r in records
-                            if "__page_marker__" not in r.tags
-                        )
-                        log.info(f"[MultiSource] {source.SOURCE_NAME}: "
-                                 f"{source_count} 条结果")
                         all_records.extend(records)
                 except Exception as e:
-                    log.error(f"[MultiSource] {source.SOURCE_NAME} 查询失败: {e}")
+                    log.error(f"[MultiSource][{request_id}] {source.SOURCE_NAME} 查询失败: {e}")
 
         return all_records
 
     @staticmethod
-    def _query_source(source, query: str, is_isbn: bool) -> List[BookRecord]:
+    def _query_source(source, query: str, is_isbn: bool):
         """查询单个源，超时/连接类错误自动重试一次"""
+        start = time.time()
         for attempt in range(2):
             try:
-                return source.search(query, is_isbn)
+                records = source.search(query, is_isbn)
+                return records, time.time() - start
             except Exception as e:
                 err = str(e).lower()
                 transient = any(kw in err for kw in (
@@ -266,7 +271,7 @@ class MultiSource(Metadata):
                     time.sleep(1)
                     continue
                 raise
-        return []
+        return [], time.time() - start
 
     @staticmethod
     def _extract_isbns(records: List[BookRecord]) -> List[str]:
@@ -282,9 +287,10 @@ class MultiSource(Metadata):
 
     CASCADE_WAIT = 15  # 级联全局超时(秒)
 
-    def _query_isbn_cascade(self, isbns: List[str]) -> List[BookRecord]:
+    def _query_isbn_cascade(self, isbns: List[str], request_id: str) -> List[BookRecord]:
         """用 ISBN 查询级联源：OpenLibrary 批量、Google Books 限流"""
         all_records = []
+        started_at = {}
 
         with ThreadPoolExecutor(max_workers=len(self._cascade_sources) + 5) as pool:
             futures = {}
@@ -293,12 +299,14 @@ class MultiSource(Metadata):
                     # OpenLibrary: 批量查询所有 ISBN（支持最多 20 个/请求）
                     future = pool.submit(source.search_by_isbns, isbns)
                     futures[future] = source.SOURCE_NAME
+                    started_at[future] = time.time()
                 else:
                     # Google Books: 逐个但限制数量
                     limited = isbns[:CASCADE_LIMIT_GOOGLE]
                     for isbn in limited:
                         future = pool.submit(source.search, isbn, True)
                         futures[future] = f"{source.SOURCE_NAME}({isbn})"
+                        started_at[future] = time.time()
 
             done, not_done = wait(futures.keys(), timeout=self.CASCADE_WAIT,
                                    return_when=ALL_COMPLETED)
@@ -306,14 +314,15 @@ class MultiSource(Metadata):
                 label = futures[future]
                 try:
                     records = future.result(timeout=0)
+                    elapsed = time.time() - started_at.get(future, time.time())
+                    log.info(f"[MultiSource][{request_id}] {label}: {len(records)} 条，耗时 {elapsed:.2f}s")
                     if records:
-                        log.info(f"[MultiSource] {label}: {len(records)} 条")
                         all_records.extend(records)
                 except Exception as e:
-                    log.error(f"[MultiSource] {label} 级联失败: {e}")
+                    log.error(f"[MultiSource][{request_id}] {label} 级联失败: {e}")
             for future in not_done:
                 label = futures[future]
-                log.warning(f"[MultiSource] {label} 级联超时({self.CASCADE_WAIT}s)，跳过")
+                log.warning(f"[MultiSource][{request_id}] {label} 级联超时({self.CASCADE_WAIT}s)，跳过")
 
         return all_records
 

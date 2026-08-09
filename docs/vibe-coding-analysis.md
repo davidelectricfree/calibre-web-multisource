@@ -14,12 +14,12 @@
 |---|---|---|---|---|
 | 豆瓣 | `source_douban.py` | 常规书名搜索 | `douban_cookie.txt` | 中文书信息、评分、简介、标签、封面 |
 | 当当 | `source_dangdang.py` | 常规书名/ISBN 搜索 | 无 | 中文书封面、出版社、出版日期、价格 |
-| 微信读书 | `source_weread.py` | 常规书名搜索 | `weread_apikey.txt`，代码内有 fallback key | 中文书简介、评分、封面、ISBN 补充 |
-| Open Library | `source_openlibrary.py` | 常规搜索 + ISBN 级联 | 公开 API，依赖代理 | 国际书目、ISBN 精确补充 |
-| Google Books | `source_googlebooks.py` | 常规搜索 + ISBN 级联 | `googlebooks_apikey.txt`，代码内有 fallback key | 全球书目、ISBN 精确补充、封面 |
+| 微信读书 | `source_weread.py` | 常规书名搜索 | `weread_apikey.txt`，无 key 时空结果降级 | 中文书简介、评分、封面、ISBN 补充 |
+| Open Library | `source_openlibrary.py` | 常规搜索 + ISBN 级联 | 公开 API，依赖代理，最佳代理 TTL 缓存 | 国际书目、ISBN 精确补充 |
+| Google Books | `source_googlebooks.py` | 常规搜索 + ISBN 级联 | `googlebooks_apikey.txt` 可选，最佳代理 TTL 缓存 | 全球书目、ISBN 精确补充、封面 |
 | 国家图书馆 | `source_nlc.py` | 可选源，默认关闭 | OPAC HTML | 权威中文书目、中图分类号 |
 
-当前 README 已描述五源聚合，但 `MultiSource.py` 文件头注释仍写“三个数据源”，属于文档/注释漂移。
+当前 README 与 `MultiSource.py` 文件头已同步为五源聚合描述。
 
 ## 2. GitHub 与 NAS 生产代码对比
 
@@ -136,15 +136,15 @@ Calibre-Web UI 展示候选元数据
 字段选择逻辑集中在 `_merge_group()`：
 
 ```python
-source_priority = {"douban": 0, "dangdang": 1, "jd": 2, "nlc": 3, "openlibrary": 4}
+source_priority = {"douban": 0, "dangdang": 1, "weread": 2, "nlc": 3, "openlibrary": 4, "googlebooks": 5, "jd": 6}
 ```
 
-当前风险：
+当前状态：
 
-1. `source_priority` 没有显式覆盖 `weread` 和 `googlebooks`，它们会落到默认优先级 99。
-2. `_pick_cover()` 也没有显式覆盖 `googlebooks` 和 `weread`，只有 fallback 才可能取到。
-3. `sources=list(set(...))` 会导致来源展示顺序不稳定。
-4. `_pick_title()` 当前选最长标题，不一定总是最适合 Calibre 的主标题，可能把副标题或版本信息纳入标题。
+1. `source_priority` 已显式覆盖 `weread` 和 `googlebooks`。
+2. `_pick_cover()` 已加入 WeRead 和 Google Books，封面优先级为豆瓣、当当、微信读书、Google Books、Open Library、NLC。
+3. 来源展示已改成按合并优先级稳定去重，不再使用 `set` 造成随机顺序。
+4. `_pick_title()` 当前仍选最长标题，后续如果要细分主标题/副标题，需要单独设计字段规则。
 
 ## 6. 代理、超时和重试
 
@@ -170,7 +170,7 @@ source_priority = {"douban": 0, "dangdang": 1, "jd": 2, "nlc": 3, "openlibrary":
 
 主要风险：
 
-1. `OpenLibrarySource._proxies_cache` 和 `GoogleBooksSource._proxies_cache` 没有过期时间。代理路径首次探测后会一直固定，和 `proxy_manager.get_proxies()` 的 60 秒缓存不是同一套逻辑。
+1. `OpenLibrarySource._proxies_cache` 和 `GoogleBooksSource._proxies_cache` 已加入 60 秒 TTL，避免一次探测结果永久固定。
 2. `verify=False` 分散在多个模块里，虽然解决了代理 SSL 问题，但会产生安全告警，也不利于统一治理。
 3. 全局代理环境变量存在时，`proxies=None` 不一定等于强制直连。NAS 生产版把 direct 返回 `{}`，可能是为了规避这一点。
 4. `MultiSource._query_all_sources()` 使用 `as_completed()`，再对已经完成的 future 调 `future.result(timeout=SOURCE_TIMEOUT)`，这个 timeout 对单源总耗时的保护有限；真正保护主要依赖各 source 内部 timeout。
@@ -205,7 +205,7 @@ source_priority = {"douban": 0, "dangdang": 1, "jd": 2, "nlc": 3, "openlibrary":
 
 限制：
 
-1. 当前代码含硬编码 fallback API key，应移除。
+1. 硬编码 fallback API key 已移除，当前依赖 `weread_apikey.txt` 或显式传入 key。
 2. `search(query, is_isbn)` 忽略 `is_isbn` 参数，本质只做关键词搜索。
 3. 详情并发限制合理，但 `/book/info` 超时时可能导致 ISBN 缺失。
 
@@ -216,8 +216,8 @@ source_priority = {"douban": 0, "dangdang": 1, "jd": 2, "nlc": 3, "openlibrary":
 限制：
 
 1. 中文书名搜索不稳定，README 也说明中文覆盖有限。
-2. `_get_best_proxies()` 无过期缓存。
-3. `search_by_isbns()` 有 debug 风格 `print()`，包含动态构造 `__import__(chr(...))`，可读性较差，应清理。
+2. `_get_best_proxies()` 已加入 60 秒 TTL。
+3. `search_by_isbns()` 中动态构造 `__import__(chr(...))` 的 debug 日志已清理。
 
 ### 7.5 Google Books
 
@@ -225,9 +225,9 @@ source_priority = {"douban": 0, "dangdang": 1, "jd": 2, "nlc": 3, "openlibrary":
 
 限制：
 
-1. 当前代码含硬编码 fallback API key，应移除。
+1. 硬编码 fallback API key 已移除，当前优先读取 `googlebooks_apikey.txt`，无 key 时不传 key。
 2. 每日配额有限，cascade 并发查询容易加速消耗。
-3. `_get_best_proxies()` 无过期缓存。
+3. `_get_best_proxies()` 已加入 60 秒 TTL。
 4. `langRestrict="zh-CN"` 是否符合 Google Books API 预期，需要用实际请求验证；常见语言参数通常是 `zh-CN` 或 `zh`，应以 API 行为为准。
 
 ### 7.6 NLC
@@ -268,17 +268,15 @@ __pycache__/
 backup_*/
 ```
 
-但源码中仍存在硬编码 fallback key：
+源码中的硬编码 fallback key 已移除：
 
-- `source_googlebooks.py` 的 `GB_API_KEY`
-- `source_weread.py` 的 `WEREAD_API_KEY`
+- `source_googlebooks.py` 的 `GB_API_KEY` 为空字符串，优先读取 `googlebooks_apikey.txt`。
+- `source_weread.py` 的 `WEREAD_API_KEY` 为空字符串，优先读取 `weread_apikey.txt`。
 
-建议后续优先处理：
+后续可选增强：
 
-1. 删除源码硬编码 key。
-2. 明确规定：无 key 文件时对应源降级为空结果，并输出可诊断日志。
-3. 支持环境变量作为第二来源，例如 `GOOGLEBOOKS_API_KEY`、`WEREAD_API_KEY`。
-4. 在 README 中说明 key 文件不进入版本控制。
+1. 支持环境变量作为第二来源，例如 `GOOGLEBOOKS_API_KEY`、`WEREAD_API_KEY`。
+2. 在 source 级别输出更清晰的“key 文件缺失”诊断日志。
 
 ## 10. 测试缺口
 
@@ -292,38 +290,35 @@ backup_*/
 6. source parser fixture：用本地 HTML/JSON fixture 测豆瓣、当当、OpenLibrary、Google Books、WeRead 解析，不依赖实时网络。
 7. 网络层 mock：测试 429、timeout、SSL error、空响应。
 
-## 11. 建议的后续开发路线
+## 11. 路线状态
 
-### P0：先保证生产与仓库可控
+### P0：已完成
 
-1. 明确 GitHub 和 NAS 的两处实质代码差异，以实际生产验证结果决定统一方向。
-2. 清理 NAS 插件目录残留备份文件，但执行前必须单独走 NAS 安全流程。
-3. 移除源码硬编码 key，改为文件/环境变量。
-4. 修正 README 中配置值与代码不一致：当前代码 `CASCADE_TIMEOUT=5`、`SOURCE_TIMEOUT=8`、`CASCADE_WAIT=15`，README 写 `CASCADE_TIMEOUT=15`、`SOURCE_TIMEOUT=12`。
-5. 更新 `MultiSource.py` 顶部注释，把“三源”改为当前五源架构。
+1. GitHub 和 NAS 的豆瓣封面域名差异已按 GitHub 版本同步到生产插件。
+2. 源码硬编码 key 已移除，Google Books 与 WeRead 改为 key 文件优先、无 key 降级。
+3. README 配置值已与当前代码同步。
+4. `MultiSource.py` 顶部注释已更新为当前五源架构。
 
-### P1：降低维护成本
+### P1：已完成本轮核心项
 
-1. 抽一个轻量 `http_client.py`，统一 timeout、headers、proxy、verify、retry、日志。
-2. 给 `probe_best_proxy()` 增加 TTL，或统一复用 `proxy_manager.get_proxies()` 的缓存模型。
-3. 用结构化 logger 替换各 source 的 `print()`。
-4. 明确 `proxies=None` 与 `proxies={}` 在容器全局代理下的行为，并固定约定。
-5. 清理 OpenLibrary 中 debug 风格代码。
+1. `book_record.py`、`matcher.py`、`proxy_manager.py`、OpenLibrary/GoogleBooks 代理缓存已补单元测试。
+2. OpenLibrary 和 Google Books 的最佳代理缓存已加入 60 秒 TTL。
+3. OpenLibrary 的动态 import debug 日志已清理。
+4. 剩余可选项：后续可继续抽 `http_client.py`，统一 timeout、headers、proxy、verify、retry 和 logger。
 
-### P2：提高结果质量
+### P2：已完成本轮核心项
 
-1. 完善 `source_priority`，加入 `weread`、`googlebooks`，并按字段区分优先级，而不是所有字段共用一个顺序。
-2. 封面优先级加入 WeRead 和 Google Books，并根据源质量调整。
-3. 标题选择从“最长标题”改成“主标题优先 + 副标题单独存储”的规则。
-4. 为 cascade 加本地短期缓存，避免同一 ISBN 重复打外部 API。
-5. 给 Google Books cascade 加速率限制和配额降级策略。
+1. `source_priority` 已加入 `weread` 和 `googlebooks`。
+2. 封面优先级已加入 WeRead 和 Google Books。
+3. source description 的来源顺序已稳定化，不再使用 `set`。
+4. 剩余可选项：标题选择仍是“最长标题”，如要改为“主标题优先 + 副标题单独存储”，建议单独设计规则并加 fixture。
 
-### P3：增强可观测性和调试
+### P3：已完成本轮核心项
 
-1. 每次搜索生成 request id，贯穿源查询、cascade、merge 日志。
-2. 输出每个源耗时、返回条数、失败原因。
-3. 给 Calibre-Web UI 可见的 source description 增加更稳定的来源顺序。
-4. 增加一个只读诊断函数或脚本，用于检查 cookie/key 文件是否存在、代理链路是否通、各源是否可用。
+1. 每次搜索会生成 request id，贯穿代理、源查询、cascade、merge 日志。
+2. 源查询日志输出返回条数和耗时。
+3. ISBN cascade 日志输出返回条数、耗时和超时信息。
+4. 剩余可选项：后续可增加只读诊断脚本，检查 cookie/key 文件、代理链路和各源可用性。
 
 ## 12. Vibe-Coding 任务拆分建议
 

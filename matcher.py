@@ -94,12 +94,9 @@ class BookMatcher:
 
         # 合并所有分组
         merged = []
-        merged.extend(self._merge_group(records, group, method="isbn")
-                      for records, group in self._flatten_groups(isbn_groups))
-        merged.extend(self._merge_group(records, group, method="fingerprint")
-                      for records, group in self._flatten_groups(fp_groups))
-        merged.extend(self._merge_group(records, group, method="fuzzy")
-                      for records, group in self._flatten_groups(fuzzy_groups))
+        merged.extend(self._merge_group(group, method="isbn") for group in isbn_groups)
+        merged.extend(self._merge_group(group, method="fingerprint") for group in fp_groups)
+        merged.extend(self._merge_group(group, method="fuzzy") for group in fuzzy_groups)
 
         # 孤儿记录各自独立
         for r in orphans:
@@ -238,13 +235,7 @@ class BookMatcher:
 
         return list(groups.values())
 
-    def _flatten_groups(self, groups: List[List[BookRecord]]) -> List[Tuple[List[BookRecord], List[BookRecord]]]:
-        """将分组列表展平"""
-        # 实际上这个方法是多余的，因为我们已经直接处理了分组
-        return [(g, g) for g in groups]  # dummy
-
-    def _merge_group(self, all_records: List[BookRecord], group: List[BookRecord],
-                     method: str = "isbn") -> MergedBook:
+    def _merge_group(self, group: List[BookRecord], method: str = "isbn") -> MergedBook:
         """
         将一个分组的记录合并为一条 MergedBook
         优先级规则：
@@ -257,8 +248,16 @@ class BookMatcher:
           - CLC：只用 NLC
           - ISBN：取所有源中最完整的
         """
-        # 源优先级
-        source_priority = {"douban": 0, "dangdang": 1, "jd": 2, "nlc": 3, "openlibrary": 4}
+        # 源优先级：中文商业/社区源优先，其次权威书目和国际源
+        source_priority = {
+            "douban": 0,
+            "dangdang": 1,
+            "weread": 2,
+            "nlc": 3,
+            "openlibrary": 4,
+            "googlebooks": 5,
+            "jd": 6,
+        }
 
         # 计算置信度
         if method == "isbn":
@@ -338,7 +337,7 @@ class BookMatcher:
             url=url,
             identifiers=identifiers,
             series_index=series_index,
-            sources=list(set(r.source_name for r in sorted_records)),
+            sources=self._ordered_source_names(sorted_records),
             confidence=confidence,
             merge_note=note,
             field_sources=field_sources,
@@ -374,6 +373,16 @@ class BookMatcher:
         )
 
     # ---- 字段挑选方法 ----
+
+    def _ordered_source_names(self, records: List[BookRecord]) -> List[str]:
+        """按排序后的记录顺序返回去重来源名，保证展示顺序稳定。"""
+        seen = set()
+        result = []
+        for r in records:
+            if r.source_name and r.source_name not in seen:
+                seen.add(r.source_name)
+                result.append(r.source_name)
+        return result
 
     def _pick_title(self, records: List[BookRecord]) -> str:
         """选最常见的标题"""
@@ -431,8 +440,8 @@ class BookMatcher:
         return max(descs, key=len) if descs else ""
 
     def _pick_cover(self, records: List[BookRecord]) -> str:
-        """封面优先级：豆瓣 > 当当 > OpenLibrary > NLC"""
-        priority = ["douban", "dangdang", "openlibrary", "nlc"]
+        """封面优先级：豆瓣 > 当当 > 微信读书 > Google Books > OpenLibrary > NLC"""
+        priority = ["douban", "dangdang", "weread", "googlebooks", "openlibrary", "nlc"]
         for src in priority:
             for r in records:
                 if r.source_id == src and r.cover_url:

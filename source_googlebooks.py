@@ -18,6 +18,7 @@ from .book_record import BookRecord, canonical_isbn, normalize_date
 # ============================================================
 GB_TIMEOUT = 8   # 查询超时（秒）
 GB_MAX_RESULTS = 10  # 最多返回条数
+PROXY_CACHE_SECONDS = 60
 
 # Google Books API 免费额度：无需 key 也能查询，但有限速
 # 有 key 的话每日 1000 次
@@ -44,6 +45,7 @@ class GoogleBooksSource:
 
     _proxies_cache = None
     _proxies_cache_name = ""
+    _proxies_cache_checked_at = 0
 
     def __init__(self, api_key: str = ""):
         self._api_key = api_key or GB_API_KEY
@@ -164,10 +166,14 @@ class GoogleBooksSource:
         return None
 
     def _get_best_proxies(self):
-        if self._proxies_cache is None:
+        """获取带 TTL 的最佳代理路径，避免一次探测结果永久固定。"""
+        now = time.time()
+        cache_expired = (now - self._proxies_cache_checked_at) >= PROXY_CACHE_SECONDS
+        if self._proxies_cache is None or cache_expired:
             px, name = probe_best_proxy()
             self._proxies_cache = px
             self._proxies_cache_name = name
+            self._proxies_cache_checked_at = now
         return self._proxies_cache
 
     def _parse_volume(self, item: dict, isbn: str = "") -> Optional[BookRecord]:
