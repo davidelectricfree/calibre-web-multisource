@@ -1,6 +1,6 @@
 # Calibre-Web MultiSource Search Performance Optimization Plan
 
-> **Implementation Status**: Phase 0 ✅ | Phase 1 ✅ | Phase 2 ✅ | Phase 3 ⏭️ skipped | Phase 4 planned | Phase 5 next
+> **Implementation Status**: Phase 0 ✅ | Phase 1 ✅ | Phase 2 ✅ | Phase 3 ⏭️ skipped | Phase 4 ✅ | Phase 5 next
 
 ## Background
 
@@ -253,9 +253,9 @@ SOURCE_CIRCUIT_BREAKER_ENABLED = True
 
 ### Acceptance criteria
 
-- A repeatedly timing-out source is skipped for the cooldown window.
-- Other sources continue to work normally.
-- Logs make it clear when a source is skipped by circuit breaker.
+- ✅ A repeatedly timing-out source is skipped for the cooldown window.
+- ✅ Other sources continue to work normally.
+- ✅ Logs make it clear when a source is skipped by circuit breaker.
 
 ## Phase 5: Limit Synchronous Enrichment
 

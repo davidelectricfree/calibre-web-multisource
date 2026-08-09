@@ -33,6 +33,7 @@ cps/metadata_provider/douban/
 ├── source_openlibrary.py   # Open Library 数据源（REST API）
 ├── source_googlebooks.py   # Google Books 数据源（REST API）
 ├── source_nlc.py           # 国家图书馆数据源（默认禁用）
+├── source_health.py        # 源熔断器（Phase 4）
 ├── clc_parser.py           # 中图分类号解析（可选）
 ├── data_wrapper.py         # CLC 数据（可选）
 ├── douban_cookie.txt       # 豆瓣 Cookie（自行配置，不入版本控制）
