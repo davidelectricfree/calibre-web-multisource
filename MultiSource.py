@@ -207,11 +207,19 @@ class MultiSource(Metadata):
                         all_records.extend(phase2_records)
 
             # 去重合并
-            merged = self.matcher.merge(all_records)
-            log.info(f"[MultiSource][{request_id}] 合并后: {len(merged)} 条 (原始 {len(all_records)} 条)")
+            try:
+                merged = self.matcher.merge(all_records)
+                log.info(f"[MultiSource][{request_id}] 合并后: {len(merged)} 条 (原始 {len(all_records)} 条)")
+            except Exception as merge_error:
+                log.error(f"[MultiSource][{request_id}] 合并失败，回退到原始记录: {merge_error}", exc_info=True)
+                merged = []
 
-            # 转换为 MetaRecord 列表
-            return self._to_meta_records(merged)
+            # 转换为 MetaRecord 列表；如果合并结果为空，至少返回原始记录的单条视图，避免整单空结果
+            if merged:
+                return self._to_meta_records(merged)
+
+            log.warning(f"[MultiSource][{request_id}] 合并结果为空，回退到原始记录直出")
+            return self._to_meta_records([self._single_book(r) for r in all_records])
 
         except Exception as e:
             log.error(f"[MultiSource][{request_id}] 搜索异常: {e}", exc_info=True)
@@ -325,6 +333,45 @@ class MultiSource(Metadata):
                 log.warning(f"[MultiSource][{request_id}] {label} 级联超时({self.CASCADE_WAIT}s)，跳过")
 
         return all_records
+
+    @staticmethod
+    def _single_book(record: BookRecord) -> MergedBook:
+        """将单个源记录包装成 MergedBook，用于合并失败或合并为空时的直出兜底。"""
+        isbn = record.get_normalized_isbn()
+        identifiers = dict(record.identifiers)
+        if isbn:
+            identifiers["isbn"] = isbn
+        return MergedBook(
+            title=record.title,
+            subtitle=record.subtitle,
+            authors=record.authors,
+            translators=record.translators,
+            publisher=record.publisher,
+            published_date=record.published_date,
+            isbn=isbn,
+            description=record.description,
+            cover_url=record.cover_url,
+            rating=record.rating,
+            tags=record.tags,
+            series=record.series,
+            language=record.language,
+            pages=record.pages,
+            clc_code=record.clc_code,
+            url=record.url,
+            identifiers=identifiers,
+            series_index=record.series_index,
+            sources=[record.source_name],
+            confidence="high",
+            field_sources={
+                "title": record.source_name,
+                "authors": record.source_name,
+                "publisher": record.source_name,
+                "description": record.source_name,
+                "cover_url": record.source_name,
+                "isbn": record.source_name,
+            },
+            source_records=[record],
+        )
 
     def _to_meta_records(self, merged_books: List[MergedBook]) -> List[MetaRecord]:
         """将 MergedBook 列表转换为 Calibre-Web 的 MetaRecord 列表"""

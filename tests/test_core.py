@@ -9,6 +9,71 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 PKG = "calibre_web_multisource_testpkg"
 
 
+def install_calibre_web_stubs():
+    flask_mod = types.ModuleType("flask")
+    flask_mod.request = types.SimpleNamespace(host_url="http://localhost/")
+
+    class Response:
+        def __init__(self, response=None, status=None, mimetype=None):
+            self.response = response
+            self.status = status
+            self.mimetype = mimetype
+
+    flask_mod.Response = Response
+    sys.modules["flask"] = flask_mod
+
+    cps = sys.modules.setdefault("cps", types.ModuleType("cps"))
+
+    logger_mod = types.ModuleType("cps.logger")
+    logger_mod.create = lambda: types.SimpleNamespace(
+        info=lambda *a, **k: None,
+        warning=lambda *a, **k: None,
+        error=lambda *a, **k: None,
+    )
+    sys.modules["cps.logger"] = logger_mod
+    cps.logger = logger_mod
+
+    services_mod = sys.modules.setdefault("cps.services", types.ModuleType("cps.services"))
+    metadata_mod = types.ModuleType("cps.services.Metadata")
+
+    class Metadata:
+        pass
+
+    class MetaSourceInfo:
+        def __init__(self, id=None, description=None, link=None):
+            self.id = id
+            self.description = description
+            self.link = link
+
+    class MetaRecord:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    metadata_mod.Metadata = Metadata
+    metadata_mod.MetaSourceInfo = MetaSourceInfo
+    metadata_mod.MetaRecord = MetaRecord
+    sys.modules["cps.services.Metadata"] = metadata_mod
+    services_mod.Metadata = metadata_mod
+
+    search_metadata_mod = sys.modules.setdefault("cps.search_metadata", types.ModuleType("cps.search_metadata"))
+    search_metadata_mod.meta = types.SimpleNamespace(route=lambda *a, **k: (lambda fn: fn))
+
+
+def install_source_stubs():
+    source_classes = {
+        "source_douban": "DoubanSource",
+        "source_nlc": "NLCSource",
+        "source_dangdang": "DangdangSource",
+        "source_weread": "WeReadSource",
+    }
+    for module_name, class_name in source_classes.items():
+        full_name = f"{PKG}.{module_name}"
+        mod = types.ModuleType(full_name)
+        mod.__dict__[class_name] = type(class_name, (), {"SOURCE_NAME": class_name, "search": lambda self, query, is_isbn=False: []})
+        sys.modules[full_name] = mod
+
+
+
 def load_module(name: str):
     package = sys.modules.get(PKG)
     if package is None:
@@ -28,11 +93,14 @@ def load_module(name: str):
     return module
 
 
+install_calibre_web_stubs()
+install_source_stubs()
 book_record = load_module("book_record")
 matcher_mod = load_module("matcher")
 proxy_manager = load_module("proxy_manager")
 source_openlibrary = load_module("source_openlibrary")
 source_googlebooks = load_module("source_googlebooks")
+multisource_mod = load_module("MultiSource")
 
 BookRecord = book_record.BookRecord
 MergedBook = book_record.MergedBook
@@ -158,6 +226,33 @@ class MatcherTests(unittest.TestCase):
         merged = BookMatcher().merge([record])
         self.assertEqual(len(merged), 1)
         self.assertEqual(merged[0].confidence, "high")
+
+
+class MultiSourceFallbackTests(unittest.TestCase):
+    def test_search_returns_raw_records_when_merge_fails(self):
+        record = BookRecord(
+            source_id="openlibrary",
+            source_name="OpenLibrary",
+            title="Fallback Book",
+            authors=["Alice"],
+            publisher="Fallback Press",
+            isbn="9787302123456",
+        )
+        source = types.SimpleNamespace(SOURCE_NAME="Fake Source", search=lambda query, is_isbn: [record])
+        provider = multisource_mod.MultiSource.__new__(multisource_mod.MultiSource)
+        provider.active = True
+        provider.sources = [source]
+        provider._cascade_sources = []
+        provider.matcher = types.SimpleNamespace(merge=mock.Mock(side_effect=RuntimeError("merge failed")))
+
+        with mock.patch.object(multisource_mod.proxy_manager, "get_proxies", return_value=None), \
+             mock.patch.object(multisource_mod.proxy_manager, "get_current_proxy_info", return_value="direct"):
+            results = provider.search("Fallback")
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].title, "Fallback Book")
+        self.assertEqual(results[0].publisher, "Fallback Press")
+        self.assertEqual(results[0].source.description, "MultiSource (OpenLibrary)")
 
 
 class ProxyManagerTests(unittest.TestCase):
