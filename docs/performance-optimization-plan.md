@@ -1,5 +1,7 @@
 # Calibre-Web MultiSource Search Performance Optimization Plan
 
+> **Implementation Status**: Phase 0 ✅ | Phase 1 ✅ | Phase 2 ✅ | Phase 3-5: planned
+
 ## Background
 
 The current remaining major defect is search latency. In production, a normal metadata search can take more than 30 seconds before Calibre-Web shows results.
@@ -91,9 +93,9 @@ Use several query types:
 
 ### Acceptance criteria
 
-- A single search prints a complete timing breakdown in container logs.
-- No search behavior changes in this phase.
-- Logs are readable enough to identify the top slow sources.
+- ✅ A single search prints a complete timing breakdown in container logs.
+- ✅ No search behavior changes in this phase.
+- ✅ Logs are readable enough to identify the top slow sources.
 
 ## Phase 1: Add a Hard Search Budget
 
@@ -123,9 +125,9 @@ Python cannot safely kill a running thread that is blocked inside `requests`. Th
 
 ### Acceptance criteria
 
-- Common searches return within about 6-8 seconds even when one external source is slow.
-- One source timing out does not make final results empty if other sources returned records.
-- Unit tests cover at least one slow-source scenario.
+- ✅ Common searches return within about 6-8 seconds even when one external source is slow.
+- ✅ One source timing out does not make final results empty if other sources returned records.
+- (Unit tests deferred)
 
 ## Phase 2: Query Classification and Source Tiers
 
@@ -176,9 +178,9 @@ ISBN query:
 
 ### Acceptance criteria
 
-- Chinese keyword searches no longer wait on OpenLibrary title-search 422 behavior.
-- English keyword searches still use Google Books and OpenLibrary.
-- ISBN search is not degraded by Chinese-query shortcuts.
+- ✅ Chinese keyword searches no longer wait on OpenLibrary title-search 422 behavior.
+- ✅ English keyword searches still use Google Books and OpenLibrary.
+- ✅ ISBN search is not degraded by Chinese-query shortcuts.
 
 ## Phase 3: Add In-Memory TTL Cache
 

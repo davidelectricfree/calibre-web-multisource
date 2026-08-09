@@ -15,6 +15,8 @@
 - **封面代理**: 解决豆瓣防盗链问题
 - **API Key 热更新**: 豆瓣 Cookie、Google Books API Key、微信读书 API Key 通过文件读取，修改后无需重启容器；无 key 文件时对应数据源优雅降级
 - **可配置**: 通过顶部常量控制源开关、超时、并发数
+- **搜索预算** (Phase 1): 全局 6s 硬上限，慢源超时自动跳过
+- **智能源选择** (Phase 2): 中文搜索自动跳过 OpenLibrary、Google Books（省 6-40s 无效等待）
 
 ## 安装
 
@@ -61,8 +63,16 @@ CASCADE_GOOGLE_BOOKS = True         # ISBN 级联查询
 CASCADE_ENABLED = True
 CASCADE_OPENLIBRARY = True
 CASCADE_TIMEOUT = 5
-SOURCE_TIMEOUT = 8
-CASCADE_WAIT = 15
+CASCADE_LIMIT_GOOGLE = 10
+
+# 搜索预算 (Phase 1)
+SEARCH_BUDGET_SECONDS = 6           # Phase1 全局等待上限
+SOURCE_TIMEOUT = 4                  # 单源超时
+SOURCE_RETRY_ENABLED = False        # 禁用自动重试
+
+# 源选择 (Phase 2)
+ZH_SKIP_OPENLIBRARY = True          # 中文搜索跳过 OpenLibrary
+ZH_SKIP_GOOGLEBOOKS = True          # 中文搜索跳过 Google Books
 ```
 
 ### API Key / Cookie 配置
@@ -79,14 +89,14 @@ CASCADE_WAIT = 15
 
 ## 数据源说明
 
-| 数据源 | 优势 | 限制 |
-|--------|------|------|
-| 豆瓣 | 中文书籍信息丰富，评分、标签、简介完善 | 需爬虫解析 HTML，需 Cookie |
-| 当当 | 中文书籍封面、价格、出版社 | 无 ISBN 字段 |
-| 微信读书 | 中文书籍评分、简介、封面 | 需 API Key，/book/info 偶有超时 |
-| Open Library | 免费 REST API，国际化 | 中文书名搜索不支持，ISBN 级联可用 |
-| Google Books | 全球覆盖，ISBN 查询准确 | 需 API Key，中文覆盖有限 |
-| 国家图书馆 | 权威中文书目，中图分类号 | OPAC 响应慢，默认禁用 |
+| 数据源 | 优势 | 限制 | 中文搜索 |
+|--------|------|------|----------|
+| 豆瓣 | 中文书籍信息丰富，评分、标签、简介完善 | 需爬虫解析 HTML，需 Cookie | 启用 |
+| 当当 | 中文书籍封面、价格、出版社 | 无 ISBN 字段 | 启用 |
+| 微信读书 | 中文书籍评分、简介、封面 | 需 API Key，/book/info 偶有超时 | 启用 |
+| Open Library | 免费 REST API，国际化 | 中文书名搜索不支持，ISBN 级联可用 | 跳过（总返回 0） |
+| Google Books | 全球覆盖，ISBN 查询准确 | 需 API Key，中文覆盖有限 | 跳过（覆盖率低） |
+| 国家图书馆 | 权威中文书目，中图分类号 | OPAC 响应慢，默认禁用 | 可选 |
 
 ## 许可证
 
