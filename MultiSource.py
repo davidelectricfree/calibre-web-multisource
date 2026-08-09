@@ -16,7 +16,7 @@ import urllib.parse
 import urllib.request
 import ssl
 import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed, wait, ALL_COMPLETED
+from concurrent.futures import ThreadPoolExecutor, wait, ALL_COMPLETED
 from typing import List
 
 import requests
@@ -366,10 +366,16 @@ class MultiSource(Metadata):
                                         f" 熔断器打开 — 连续失败 {source_health.SOURCE_FAILURE_THRESHOLD} 次")
 
             # 日志记录因预算耗尽被跳过的源
+            unused = []
             for future in not_done:
                 source = futures[future]
-                log.warning(f"[MultiSource][{request_id}] source={source.SOURCE_NAME}"
-                            f" 超过搜索预算({SEARCH_BUDGET_SECONDS}s)，已跳过")
+                unused.append(futures[future].SOURCE_NAME)
+            if unused:
+                log.warning(f"[MultiSource][{request_id}] 搜索预算耗尽"
+                            f"({SEARCH_BUDGET_SECONDS}s)，跳过: {unused}")
+
+            # shutdown(wait=False): 不等待 pending futures，避免搜索预算被绕过
+            pool.shutdown(wait=False)
 
         phase1_total = time.time() - phase1_start
         early = len(all_records) >= FAST_RESULT_MIN_COUNT
@@ -429,12 +435,10 @@ class MultiSource(Metadata):
             futures = {}
             for source in self._cascade_sources:
                 if hasattr(source, 'search_by_isbns'):
-                    # OpenLibrary: 批量查询所有 ISBN（支持最多 20 个/请求）
                     future = pool.submit(source.search_by_isbns, isbns)
                     futures[future] = source.SOURCE_NAME
                     started_at[future] = time.time()
                 else:
-                    # Google Books: 逐个但限制数量
                     limited = isbns[:CASCADE_LIMIT_GOOGLE]
                     for isbn in limited:
                         future = pool.submit(source.search, isbn, True)
@@ -456,6 +460,8 @@ class MultiSource(Metadata):
             for future in not_done:
                 label = futures[future]
                 log.warning(f"[MultiSource][{request_id}] {label} 级联超时({CASCADE_TIMEOUT}s)，跳过")
+
+            pool.shutdown(wait=False)
 
         return all_records
 
