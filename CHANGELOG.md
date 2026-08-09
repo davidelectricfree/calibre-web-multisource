@@ -4,6 +4,15 @@ All notable changes to Calibre-Web MultiSource.
 
 ## [2026-08-09] Performance Optimization Sprint
 
+### Fix: Douban Cover Download
+- **Fixed** Douban cover images intermittently failing (0-byte or broken image)
+- Added `_get_cover_request_params()`: domestic covers bypass global proxy
+- Douban covers now use direct connection (`proxies={"http": None, "https": None}`)
+- Added `Referer: https://book.douban.com/` header (anti-hotlinking prevention)
+- Added Cookie from `douban_cookie.txt` for authenticated cover access
+- Applied to both cover proxy route and `hack_cover_proxy` monkey patch
+- Reference: fugary/calibre-douban cover download approach
+
 ### Phase 4: Source Circuit Breaker
 - **Added** `source_health.py` — CircuitBreaker with closed/open/half_open states
 - **Added** `SOURCE_CIRCUIT_BREAKER_ENABLED` config (default: True)

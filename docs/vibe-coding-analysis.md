@@ -303,6 +303,13 @@ backup_*/
 | Phase 4 | 源熔断器 | ✅ (2026-08-09) |
 | Phase 5 | 级联/丰富限流 | ✅ (2026-08-09) |
 
+### Bug 修复
+
+| 日期 | 内容 | 状态 |
+|------|------|------|
+| 2026-08-09 | ThreadPoolExecutor shutdown(wait=False) 搜索预算绕过 | ✅ |
+| 2026-08-09 | 豆瓣封面下载 — bypass 代理 + Cookie/Referer（参考 fugary/calibre-douban） | ✅ |
+
 ### P0：已完成
 
 1. GitHub 和 NAS 的豆瓣封面域名差异已按 GitHub 版本同步到生产插件。
