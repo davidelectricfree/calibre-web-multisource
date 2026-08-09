@@ -95,8 +95,11 @@ GOOGLE_BOOKS_AS_SOURCE = True   # Google Books 是否作为常规源参与书名
 CASCADE_TIMEOUT = 5          # ISBN 级联超时（秒）
 CASCADE_LIMIT_GOOGLE = 10  # Google Books 单次级联最多 ISBN 数
 
-# 最大并发源查询数
-SOURCE_TIMEOUT = 8   # 单源超时（秒）
+# Phase 1: 搜索预算
+SEARCH_BUDGET_SECONDS = 6      # Phase1 全局等待上限（秒）
+FAST_RESULT_MIN_COUNT = 5      # 结果足够时可提前进入 merge
+SOURCE_TIMEOUT = 4             # 单源超时（秒）
+SOURCE_RETRY_ENABLED = False   # 禁用自动重试，避免单源消耗 4+1+4=9s 超出预算
 
 # 封面代理（解决豆瓣防盗链）
 PROXY_DOUBAN_COVER = True
@@ -266,7 +269,7 @@ class MultiSource(Metadata):
         return "en"
 
     def _query_all_sources(self, query: str, is_isbn: bool, request_id: str) -> List[BookRecord]:
-        """并行查询所有启用的数据源"""
+        """并行查询所有启用的数据源。SEARCH_BUDGET_SECONDS 内完成的源正常合并，超时源跳过。"""
         all_records = []
         phase1_start = time.time()
 
@@ -275,10 +278,15 @@ class MultiSource(Metadata):
                 pool.submit(self._query_source, source, query, is_isbn, request_id): source
                 for source in self.sources
             }
-            for future in as_completed(futures):
+
+            # Phase 1: 用 wait() 替代 as_completed()，全局超时硬限制
+            done, not_done = wait(futures.keys(), timeout=SEARCH_BUDGET_SECONDS,
+                                  return_when=ALL_COMPLETED)
+
+            for future in done:
                 source = futures[future]
                 try:
-                    records, elapsed, retries, status = future.result(timeout=SOURCE_TIMEOUT)
+                    records, elapsed, retries, status = future.result(timeout=0)
                     source_count = sum(
                         1 for r in records
                         if "__page_marker__" not in r.tags
@@ -289,24 +297,32 @@ class MultiSource(Metadata):
                     if records:
                         all_records.extend(records)
                 except Exception as e:
-                    elapsed = time.time() - phase1_start
                     log.error(f"[MultiSource][{request_id}] source={source.SOURCE_NAME}"
-                              f" status=error duration={elapsed:.2f}s"
-                              f" count=0 error={e}")
+                              f" status=error error={e}")
+
+            # 日志记录因预算耗尽被跳过的源
+            for future in not_done:
+                source = futures[future]
+                log.warning(f"[MultiSource][{request_id}] source={source.SOURCE_NAME}"
+                            f" 超过搜索预算({SEARCH_BUDGET_SECONDS}s)，已跳过")
 
         phase1_total = time.time() - phase1_start
+        early = len(all_records) >= FAST_RESULT_MIN_COUNT
         log.info(f"[MultiSource][{request_id}] phase1 done"
-                 f" duration={phase1_total:.2f}s total_records={len(all_records)}")
+                 f" duration={phase1_total:.2f}s total_records={len(all_records)}"
+                 f" early_merge={early}")
         return all_records
 
     @staticmethod
     def _query_source(source, query: str, is_isbn: bool, request_id: str):
-        """查询单个源，超时/连接类错误自动重试一次。
+        """查询单个源。
+        SOURCE_RETRY_ENABLED=True 时超时/连接类错误自动重试一次。
         返回 (records, elapsed, retry_count, status)
         status: 'ok' | 'timeout' | 'error'
         """
         start = time.time()
-        for attempt in range(2):
+        max_attempts = 2 if SOURCE_RETRY_ENABLED else 1
+        for attempt in range(max_attempts):
             try:
                 records = source.search(query, is_isbn)
                 return records, time.time() - start, attempt, "ok"
@@ -317,7 +333,7 @@ class MultiSource(Metadata):
                     "connection", "ssl", "reset", "refused", "eof",
                 ))
                 status = "timeout" if is_timeout else "error"
-                if attempt == 0 and transient:
+                if attempt < max_attempts - 1 and transient:
                     log.warning(
                         f"[MultiSource][{request_id}] {source.SOURCE_NAME}"
                         f" 失败({e})，重试..."
@@ -325,7 +341,7 @@ class MultiSource(Metadata):
                     time.sleep(1)
                     continue
                 return [], time.time() - start, attempt, status
-        return [], time.time() - start, 2, "error"
+        return [], time.time() - start, max_attempts - 1, "error"
 
     @staticmethod
     def _extract_isbns(records: List[BookRecord]) -> List[str]:
