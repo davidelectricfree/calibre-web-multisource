@@ -13,7 +13,7 @@
 - **字段级溯源**: 每个字段标注来自哪个数据源
 - **豆瓣翻页**: 支持搜索结果翻页
 - **封面代理**: 解决豆瓣防盗链问题
-- **API Key 热更新**: 豆瓣 Cookie、Google Books API Key、微信读书 API Key 通过文件读取，修改后无需重启容器
+- **API Key 热更新**: 豆瓣 Cookie、Google Books API Key、微信读书 API Key 通过文件读取，修改后无需重启容器；无 key 文件时对应数据源优雅降级
 - **可配置**: 通过顶部常量控制源开关、超时、并发数
 
 ## 安装
@@ -60,8 +60,9 @@ CASCADE_GOOGLE_BOOKS = True         # ISBN 级联查询
 # ISBN 级联
 CASCADE_ENABLED = True
 CASCADE_OPENLIBRARY = True
-CASCADE_TIMEOUT = 15
-SOURCE_TIMEOUT = 12
+CASCADE_TIMEOUT = 5
+SOURCE_TIMEOUT = 8
+CASCADE_WAIT = 15
 ```
 
 ### API Key / Cookie 配置

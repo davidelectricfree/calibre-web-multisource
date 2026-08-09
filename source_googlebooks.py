@@ -11,7 +11,7 @@ from typing import List, Optional
 from . import proxy_manager
 from .proxy_manager import probe_best_proxy
 from requests.adapters import HTTPAdapter
-from .book_record import BookRecord, canonical_isbn, normalize_date, normalize_date
+from .book_record import BookRecord, canonical_isbn, normalize_date
 
 # ============================================================
 # 配置
@@ -21,7 +21,7 @@ GB_MAX_RESULTS = 10  # 最多返回条数
 
 # Google Books API 免费额度：无需 key 也能查询，但有限速
 # 有 key 的话每日 1000 次
-GB_API_KEY = "AIzaSyDaMsuCFGtm6zDc2U70NCv9kEF4tZDQWis"  # 备用：硬编码 Key（优先读 googlebooks_apikey.txt）
+GB_API_KEY = ""  # 优先读 googlebooks_apikey.txt；无文件则不传 key
 GB_SEARCH_API = "https://www.googleapis.com/books/v1/volumes"
 
 GB_HEADERS = {
@@ -65,7 +65,7 @@ class GoogleBooksSource:
         return ""
 
     def _get_api_key(self) -> str:
-        """获取 API Key：优先从文件读取，fallback 到硬编码"""
+        """获取 API Key：优先从文件读取；无文件则返回空字符串"""
         return self._read_apikey_file() or self._api_key
 
     def search(self, query: str, is_isbn: bool = False) -> List[BookRecord]:

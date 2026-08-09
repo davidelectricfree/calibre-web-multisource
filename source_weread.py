@@ -22,8 +22,8 @@ WEREAD_DETAIL_LIMIT = 5  # 最多获取多少本书的详情
 WEREAD_GATEWAY = "https://i.weread.qq.com/api/agent/gateway"
 WEREAD_SKILL_VERSION = "1.0.4"
 
-# 备用硬编码 Key（优先读 weread_apikey.txt）
-WEREAD_API_KEY = "wrk-bxrLpUXXRUKvcFzIdqwJrwAA"
+# 优先读 weread_apikey.txt；无文件则不传 key
+WEREAD_API_KEY = ""
 
 WEREAD_HEADERS = {
     "User-Agent": (
@@ -58,7 +58,7 @@ class WeReadSource:
         return ""
 
     def _get_api_key(self) -> str:
-        """获取 API Key：优先从文件读取，fallback 到硬编码"""
+        """获取 API Key：优先从文件读取；无文件则返回空字符串"""
         return self._read_apikey_file() or self._api_key
 
     def _get_auth_headers(self) -> Dict[str, str]:
