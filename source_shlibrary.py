@@ -154,6 +154,9 @@ class ShanghaiLibrarySource:
 
         author = self._extract_tag(html, "property", "author") or ""
 
+        # 提取封面 URL（内部图片服务：/Cover/Show?instanceId=UUID）
+        cover_url = self._extract_cover_url(html, record_id)
+
         # 构建记录
         record = BookRecord(
             source_id=self.SOURCE_ID,
@@ -165,10 +168,11 @@ class ShanghaiLibrarySource:
             published_date=normalize_date(pub_date) if pub_date else "",
             isbn=isbn,
             description=table_data.get("description", ""),
+            cover_url=cover_url,
             tags=table_data.get("subjects", []),
             language=table_data.get("language", ""),
             pages=table_data.get("pages", ""),
-            clc_code="",  # 上海图书馆不提供中图分类号解析
+            clc_code="",
             url=f"{SHL_RECORD_BASE}/{record_id}",
             raw_id=isbn or record_id,
             identifiers={"shl_id": record_id},
@@ -247,6 +251,18 @@ class ShanghaiLibrarySource:
                 result["language"] = lang
 
         return result
+
+    @staticmethod
+    def _extract_cover_url(html: str, record_id: str) -> str:
+        """提取书籍封面图片 URL。
+        VuFind 内部图片服务格式: /Cover/Show?instanceId=UUID"""
+        m = re.search(
+            r'<img[^>]*src="(/Cover/Show\?instanceId=[^"]*)"',
+            html
+        )
+        if m:
+            return f"https://vufind.library.sh.cn{m.group(1)}"
+        return ""
 
     @staticmethod
     def _extract_tag(html: str, attr: str, value: str,

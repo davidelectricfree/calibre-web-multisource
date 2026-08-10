@@ -242,7 +242,7 @@ class BookMatcher:
           - 标题：取最常见的（最长、去重后唯一的）
           - 作者：合并所有源去重
           - 出版社：优先豆瓣 > shlibrary > OpenLibrary
-          - 封面：优先豆瓣 > OpenLibrary
+          - 封面：豆瓣 > 当当 > 微信读书 > Google Books > OpenLibrary > shlibrary
           - 评分：优先豆瓣
           - 简介：优先豆瓣，其次选非空最长的
           - ISBN：取所有源中最完整的
