@@ -4,6 +4,11 @@ All notable changes to Calibre-Web MultiSource.
 
 ## [2026-08-10] 架构复盘 Roadmap
 
+### P1 性能语义验证
+- **Removed** `SOURCE_TIMEOUT = 4` 死代码 — 从未被引用，阶段 1 真正超时由 `SEARCH_BUDGET_SECONDS` 控制
+- **Documented** 源 timeout 与预算的关系：源内部 timeout (8-10s) 作为二级安全网 >= 预算值 (6s)
+- **Added** `SourceTimeoutHealthTests` (2 项): 验证死代码已清除 + 已知源 timeout >= 预算
+
 ### P0 正确性修复
 - **Fixed** `MultiSource.py` 缺少 `import os` — 豆瓣封面 Cookie 读取路径触发 `NameError`
 - **Fixed** 搜索预算被 `ThreadPoolExecutor` context manager 绕过 — `_query_all_sources()` 和 `_query_isbn_cascade()` 移除 `with` context manager，改用显式 `try/finally pool.shutdown(wait=False)`，确保慢源不阻塞返回

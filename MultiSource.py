@@ -100,9 +100,11 @@ CASCADE_LIMIT_GOOGLE = 10  # Google Books 单次级联最多 ISBN 数
 CASCADE_MAX_RECORDS = 3      # Phase 5: 只级联 top N 个 ISBN 候选
 
 # Phase 1: 搜索预算
+# 各数据源内部有自己的 timeout（DOUBAN_TIMEOUT=8, GB_TIMEOUT=8, OL_TIMEOUT=10 等）
+# 作为二级安全网存在。阶段 1 的真正超时由 SEARCH_BUDGET_SECONDS 控制；
+# 源内部 timeout 应 >= 预算值，否则源的超时会在预算之前触发。
 SEARCH_BUDGET_SECONDS = 6      # Phase1 全局等待上限（秒）
 FAST_RESULT_MIN_COUNT = 5      # 结果足够时可提前进入 merge
-SOURCE_TIMEOUT = 4             # 单源超时（秒）
 SOURCE_RETRY_ENABLED = False   # 禁用自动重试，避免单源消耗 4+1+4=9s 超出预算
 
 # Phase 2: 源分类与选择 — 中文搜索跳过对中文支持差/慢的外部源

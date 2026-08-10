@@ -492,5 +492,40 @@ class SearchBudgetTests(unittest.TestCase):
         self.assertLess(elapsed, multisource_mod.SEARCH_BUDGET_SECONDS + 1.0)
 
 
+class SourceTimeoutHealthTests(unittest.TestCase):
+    """验证源 timeout 常量与搜索预算的关系。
+    各源内部 timeout 作为二级安全网，应 >= SEARCH_BUDGET_SECONDS，
+    否则源将在预算之前先超时，造成不必要的失败。"""
+
+    # 已知的源 timeout 常量名 → 值（手动维护，与源文件保持同步）
+    KNOWN_SOURCE_TIMEOUTS = {
+        "source_douban": {"DOUBAN_TIMEOUT": 8},
+        "source_dangdang": {"DANGDANG_TIMEOUT": 10},
+        "source_googlebooks": {"GB_TIMEOUT": 8},
+        "source_openlibrary": {"OL_TIMEOUT": 10},
+        "source_weread": {"WEREAD_TIMEOUT": 8},
+    }
+
+    def test_source_timeouts_not_less_than_budget(self):
+        """所有已知源内部 timeout 应 >= 搜索预算"""
+        budget = multisource_mod.SEARCH_BUDGET_SECONDS
+        for source, constants in self.KNOWN_SOURCE_TIMEOUTS.items():
+            for name, value in constants.items():
+                with self.subTest(source=source, constant=name):
+                    self.assertGreaterEqual(
+                        value, budget,
+                        f"{source}.{name}={value} < SEARCH_BUDGET={budget} — "
+                        f"源内部超时不应低于预算值，否则会在预算前先触发超时"
+                    )
+
+    def test_source_timeout_no_longer_dead_code(self):
+        """验证 SOURCE_TIMEOUT 死代码已清除"""
+        self.assertFalse(
+            hasattr(multisource_mod, "SOURCE_TIMEOUT"),
+            "SOURCE_TIMEOUT 是死代码，已在 P1 中删除。"
+            "如需要单源超时，应修改各源自己的 timeout 常量。"
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
