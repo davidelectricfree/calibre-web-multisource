@@ -4,6 +4,14 @@ All notable changes to Calibre-Web MultiSource.
 
 ## [2026-08-10] 架构复盘 Roadmap
 
+### P2 统一代理策略
+- **Unified** 代理选择：生产搜索路径统一使用 `get_proxies()`（纯 TCP 端口探测），移除 OL/GB 中的 `probe_best_proxy()` HTTP 延迟探测调用
+- **Added** `PROXY_DIAGNOSTIC_ENABLED = False` 标志到 `proxy_manager.py` — HTTP 探测默认关闭，规避 cw_advocate 代理禁令；设为 True 可启用延迟诊断
+- **Removed** 死代码：OL/GB 源文件中未使用的 `_get_proxies()` 包装函数
+- **Simplified** OL/GB `_get_best_proxies()` → 直接委托给 `proxy_manager.get_proxies()`（模块级 60s 缓存已足够）
+- **Removed** OL/GB 各自的 `_proxies_cache` / `_proxies_cache_name` / `_proxies_cache_checked_at` 类属性 — 缓存由 proxy_manager 统一管理
+- **Updated** 测试: OL/GB 委托验证 + `get_proxies()` 60s 缓存 TTL 测试
+
 ### P1 性能语义验证
 - **Removed** `SOURCE_TIMEOUT = 4` 死代码 — 从未被引用，阶段 1 真正超时由 `SEARCH_BUDGET_SECONDS` 控制
 - **Documented** 源 timeout 与预算的关系：源内部 timeout (8-10s) 作为二级安全网 >= 预算值 (6s)

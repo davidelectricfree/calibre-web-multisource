@@ -9,7 +9,6 @@ from typing import List, Optional
 import requests
 
 from . import proxy_manager
-from .proxy_manager import probe_best_proxy
 from requests.adapters import HTTPAdapter
 from .book_record import BookRecord, canonical_isbn, normalize_date
 
@@ -21,28 +20,15 @@ OL_BOOKS_API = "https://openlibrary.org/api/books"
 OL_SEARCH_API = "https://openlibrary.org/search.json"
 OL_TIMEOUT = 10
 OL_BATCH_SIZE = 20  # max ISBNs per batch request
-PROXY_CACHE_SECONDS = 60
 
 OL_HEADERS = {
     "User-Agent": "CalibreWeb-MultiSource/1.0 (davidelectricfree@gmail.com)",
     "Accept": "application/json",
 }
 
-# 代理：由 proxy_manager 动态获取（解决 NAS 环境无法直连 openlibrary.org）
-def _get_proxies():
-    return proxy_manager.get_proxies()
-
-
-# ============================================================
-# 源模块
-# ============================================================
 class OpenLibrarySource:
     SOURCE_ID = "openlibrary"
     SOURCE_NAME = "Open Library"
-
-    _proxies_cache = None
-    _proxies_cache_name = ""
-    _proxies_cache_checked_at = 0
 
     def __init__(self):
         self._session = requests.Session()
@@ -186,15 +172,8 @@ class OpenLibrarySource:
         return None
 
     def _get_best_proxies(self):
-        """获取带 TTL 的最佳代理路径，避免一次探测结果永久固定。"""
-        now = time.time()
-        cache_expired = (now - self._proxies_cache_checked_at) >= PROXY_CACHE_SECONDS
-        if self._proxies_cache is None or cache_expired:
-            px, name = probe_best_proxy()
-            self._proxies_cache = px
-            self._proxies_cache_name = name
-            self._proxies_cache_checked_at = now
-        return self._proxies_cache
+        """获取当前可用代理（由 proxy_manager get_proxies() 统一管理，含 60s 缓存和主备切换）。"""
+        return proxy_manager.get_proxies()
 
     def _parse_book(self, book_data: dict, isbn: str = "") -> Optional[BookRecord]:
         """解析 /api/books 返回的单本书数据"""

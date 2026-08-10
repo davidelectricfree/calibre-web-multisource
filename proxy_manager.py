@@ -27,6 +27,7 @@ PROXY_LIST = [
 # ============================================================
 TCP_TIMEOUT = 1              # TCP 端口探测超时（秒）
 PROXY_CACHE_SECONDS = 60     # 检测结果缓存时间
+PROXY_DIAGNOSTIC_ENABLED = False  # HTTP 延迟探测开关 — 生产默认关闭，避免触发 cw_advocate 代理禁令
 
 # 运行时状态
 _active_proxy = None
@@ -97,9 +98,15 @@ def _check_port(name, url):
 
 def probe_best_proxy(target_url="https://openlibrary.org/search.json?q=test&limit=1",
                      timeout=5):
-    """测试直连、xray、clash 的延迟，返回最优代理配置
+    """测试直连、xray、clash 的延迟，返回最优代理配置。
+
+    仅在 PROXY_DIAGNOSTIC_ENABLED=True 时执行 HTTP 探测。
+    生产搜索路径使用 get_proxies() (纯 TCP 探测) 以规避 cw_advocate 代理禁令。
     返回: (proxies_dict, name) 或 (None, "direct")
     """
+    if not PROXY_DIAGNOSTIC_ENABLED:
+        return (None, "direct")
+
     import requests
     import time
 

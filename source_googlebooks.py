@@ -9,7 +9,6 @@ import requests
 from typing import List, Optional
 
 from . import proxy_manager
-from .proxy_manager import probe_best_proxy
 from requests.adapters import HTTPAdapter
 from .book_record import BookRecord, canonical_isbn, normalize_date
 
@@ -18,7 +17,6 @@ from .book_record import BookRecord, canonical_isbn, normalize_date
 # ============================================================
 GB_TIMEOUT = 8   # 查询超时（秒）
 GB_MAX_RESULTS = 10  # 最多返回条数
-PROXY_CACHE_SECONDS = 60
 
 # Google Books API 免费额度：无需 key 也能查询，但有限速
 # 有 key 的话每日 1000 次
@@ -32,20 +30,11 @@ GB_HEADERS = {
     ),
 }
 
-# 代理：由 proxy_manager 动态获取
-def _get_proxies():
-    return proxy_manager.get_proxies()
-
-
 class GoogleBooksSource:
     """Google Books API 数据源"""
 
     SOURCE_ID = "googlebooks"
     SOURCE_NAME = "Google Books"
-
-    _proxies_cache = None
-    _proxies_cache_name = ""
-    _proxies_cache_checked_at = 0
 
     def __init__(self, api_key: str = ""):
         self._api_key = api_key or GB_API_KEY
@@ -166,15 +155,8 @@ class GoogleBooksSource:
         return None
 
     def _get_best_proxies(self):
-        """获取带 TTL 的最佳代理路径，避免一次探测结果永久固定。"""
-        now = time.time()
-        cache_expired = (now - self._proxies_cache_checked_at) >= PROXY_CACHE_SECONDS
-        if self._proxies_cache is None or cache_expired:
-            px, name = probe_best_proxy()
-            self._proxies_cache = px
-            self._proxies_cache_name = name
-            self._proxies_cache_checked_at = now
-        return self._proxies_cache
+        """获取当前可用代理（由 proxy_manager get_proxies() 统一管理，含 60s 缓存和主备切换）。"""
+        return proxy_manager.get_proxies()
 
     def _parse_volume(self, item: dict, isbn: str = "") -> Optional[BookRecord]:
         """解析 Google Books API 返回的 volume"""

@@ -269,31 +269,52 @@ class ProxyManagerTests(unittest.TestCase):
             return Resp(200)
 
         fake_requests = types.SimpleNamespace(get=mock.Mock(side_effect=fake_get))
-        with mock.patch.dict(sys.modules, {"requests": fake_requests}), \
-             mock.patch("calibre_web_multisource_testpkg.proxy_manager.time.time", side_effect=[1.0, 1.1, 2.0, 3.0, 4.0, 5.0]):
-            proxies, name = proxy_manager.probe_best_proxy(timeout=1)
+        proxy_manager.PROXY_DIAGNOSTIC_ENABLED = True
+        try:
+            with mock.patch.dict(sys.modules, {"requests": fake_requests}), \
+                 mock.patch("calibre_web_multisource_testpkg.proxy_manager.time.time", side_effect=[1.0, 1.1, 2.0, 3.0, 4.0, 5.0]):
+                proxies, name = proxy_manager.probe_best_proxy(timeout=1)
+        finally:
+            proxy_manager.PROXY_DIAGNOSTIC_ENABLED = False
 
         self.assertIsNone(proxies)
         self.assertEqual(name, "direct")
         self.assertEqual(calls[0], None)
 
+    def test_get_proxies_cache_ttl(self):
+        """get_proxies() 在 60s 内返回缓存结果，过期后重新探测"""
+        with mock.patch.object(proxy_manager, "_check_port", return_value=True), \
+             mock.patch.object(proxy_manager.time, "time", side_effect=[100.0, 130.0, 170.0]):
+            # 首次调用：探测端口
+            result1 = proxy_manager.get_proxies()
+            self.assertIsNotNone(result1)
+            self.assertEqual(result1, {"http": "http://192.168.1.249:20172",
+                                       "https": "http://192.168.1.249:20172"})
+            # 30s 后：仍在缓存期内
+            result2 = proxy_manager.get_proxies()
+            self.assertEqual(result2, result1)
+            # 70s 后：缓存过期，重新探测
+            result3 = proxy_manager.get_proxies()
+            self.assertEqual(result3, result1)
+            # 重新探测到同一代理（因为 _check_port 总是 True）
+
 
 class SourceProxyCacheTests(unittest.TestCase):
-    def test_openlibrary_proxy_cache_has_ttl(self):
+    def test_openlibrary_get_best_proxies_delegates_to_get_proxies(self):
+        """OL._get_best_proxies() 直接委托给 proxy_manager.get_proxies()"""
         source = source_openlibrary.OpenLibrarySource()
-        with mock.patch.object(source_openlibrary, "probe_best_proxy", side_effect=[({"http": "first"}, "first"), ({"http": "second"}, "second")]), \
-             mock.patch.object(source_openlibrary.time, "time", side_effect=[100.0, 120.0, 170.1]):
-            self.assertEqual(source._get_best_proxies(), {"http": "first"})
-            self.assertEqual(source._get_best_proxies(), {"http": "first"})
-            self.assertEqual(source._get_best_proxies(), {"http": "second"})
+        with mock.patch.object(source_openlibrary.proxy_manager, "get_proxies",
+                               return_value={"http": "px", "https": "px"}):
+            result = source._get_best_proxies()
+            self.assertEqual(result, {"http": "px", "https": "px"})
 
-    def test_googlebooks_proxy_cache_has_ttl(self):
+    def test_googlebooks_get_best_proxies_delegates_to_get_proxies(self):
+        """GB._get_best_proxies() 直接委托给 proxy_manager.get_proxies()"""
         source = source_googlebooks.GoogleBooksSource()
-        with mock.patch.object(source_googlebooks, "probe_best_proxy", side_effect=[({"http": "first"}, "first"), ({"http": "second"}, "second")]), \
-             mock.patch.object(source_googlebooks.time, "time", side_effect=[100.0, 120.0, 170.1]):
-            self.assertEqual(source._get_best_proxies(), {"http": "first"})
-            self.assertEqual(source._get_best_proxies(), {"http": "first"})
-            self.assertEqual(source._get_best_proxies(), {"http": "second"})
+        with mock.patch.object(source_googlebooks.proxy_manager, "get_proxies",
+                               return_value={"http": "px", "https": "px"}):
+            result = source._get_best_proxies()
+            self.assertEqual(result, {"http": "px", "https": "px"})
 
 
 class CoverProxyTests(unittest.TestCase):
