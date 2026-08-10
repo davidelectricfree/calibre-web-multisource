@@ -156,6 +156,8 @@ class ShanghaiLibrarySource:
 
         # 提取封面 URL（内部图片服务：/Cover/Show?instanceId=UUID）
         cover_url = self._extract_cover_url(html, record_id)
+        if cover_url:
+            cover_url = self._validate_cover_url(cover_url)
 
         # 构建记录
         record = BookRecord(
@@ -263,6 +265,24 @@ class ShanghaiLibrarySource:
         if m:
             return f"https://vufind.library.sh.cn{m.group(1)}"
         return ""
+
+    def _validate_cover_url(self, cover_url: str) -> str:
+        """校验封面 URL：HEAD 请求验证状态码 + Content-Type + 大小 > 1KB。
+        不合法则返回空字符串，避免存无效/占位封面。"""
+        try:
+            resp = requests.head(cover_url, headers=SHL_HEADERS,
+                                 timeout=SHL_TIMEOUT, verify=False)
+            if resp.status_code != 200:
+                return ""
+            content_type = resp.headers.get("Content-Type", "")
+            if not content_type.startswith("image/"):
+                return ""
+            content_length = resp.headers.get("Content-Length", "0")
+            if int(content_length) < 1024:
+                return ""
+            return cover_url
+        except Exception:
+            return ""
 
     @staticmethod
     def _extract_tag(html: str, attr: str, value: str,
