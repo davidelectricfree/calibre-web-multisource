@@ -1,117 +1,129 @@
 # Roadmap
 
-This roadmap is based on the 2026-08-10 architecture review after the performance optimization phases were completed.
+本文档基于 2026-08-10 架构复盘，复盘对象是性能优化阶段完成后的 Calibre-Web MultiSource 元数据聚合插件。
 
-## Current Architecture Assessment
+## 当前架构判断
 
-The current architecture is suitable for the plugin's production use case: a single-user Calibre-Web deployment on NAS, aggregating unstable external metadata sources while keeping Chinese metadata quality high.
+当前架构适合这个插件的生产使用场景：单用户 Calibre-Web、NAS 部署、多个外部元数据源不稳定、同时需要优先保证中文书籍元数据质量。
 
-The project should not be rewritten. The existing boundaries are mostly right:
+项目不建议推倒重写。现有边界基本合理：
 
-- `MultiSource.py` is the Calibre-Web provider entry and orchestration layer.
-- `source_*.py` modules isolate external source behavior.
-- `book_record.py` defines the normalized internal data model.
-- `matcher.py` owns deduplication and field merge rules.
-- `proxy_manager.py` owns proxy path selection.
-- `source_health.py` owns source circuit breaking.
+- `MultiSource.py` 是 Calibre-Web metadata provider 入口，负责搜索编排和结果转换。
+- `source_*.py` 独立封装每个外部数据源的请求、解析和降级逻辑。
+- `book_record.py` 定义插件内部统一数据模型。
+- `matcher.py` 负责 ISBN、复合指纹、模糊匹配和字段合并规则。
+- `proxy_manager.py` 负责代理路径选择。
+- `source_health.py` 负责数据源熔断。
 
-The next work should focus on correctness, tests, and operational clarity instead of large architecture changes.
+下一阶段重点不是大规模重构，而是修复明确问题、补齐测试和统一运维语义。
 
-## Priority 0: Correctness Fixes
+## 优先级 0：正确性修复
 
-These should be handled before any further feature work.
+这些问题应在任何新功能之前处理。
 
-1. Fix Douban cover Cookie branch
+1. 修复豆瓣封面 Cookie 分支
 
-   `MultiSource.py` uses `os.path` in `_get_cover_request_params()` but does not import `os`. This can raise `NameError` when Douban cover download tries to read `douban_cookie.txt`.
+   `MultiSource.py` 的 `_get_cover_request_params()` 使用了 `os.path`，但文件顶部没有 `import os`。当豆瓣封面下载尝试读取 `douban_cookie.txt` 时，可能触发 `NameError`。
 
-2. Restore a green test baseline
+2. 恢复绿色测试基线
 
-   Current local result from `python -m unittest discover -s tests -v`:
+   当前本地测试结果：
 
-   - 13 tests discovered
-   - 12 passed
-   - 1 failed: `test_search_returns_raw_records_when_merge_fails`
+   ```text
+   python -m unittest discover -s tests -v
+   ```
 
-   The failing test appears to be out of sync with the Phase 4 `circuit_breaker` field. Fix the test scaffold and keep this suite green before changing behavior.
+   结果：
 
-3. Add missing regression tests
+   - 发现 13 个测试。
+   - 12 个通过。
+   - 1 个失败：`test_search_returns_raw_records_when_merge_fails`。
 
-   Add focused tests for:
+   该失败看起来是测试桩没有跟上 Phase 4 新增的 `circuit_breaker` 字段。后续修改行为前，应先修复测试脚手架并保持测试全绿。
 
-   - Douban cover request parameter generation, including Cookie file handling.
-   - Search fallback when merge fails.
-   - Circuit breaker skip and recovery behavior.
-   - Search budget behavior with one fast source and one slow source.
+3. 补齐关键回归测试
 
-## Priority 1: Validate Performance Semantics
+   需要增加聚焦测试，覆盖：
 
-The performance sprint reduced the likely tail latency, but two implementation details need explicit verification.
+   - 豆瓣封面请求参数生成，包括 Cookie 文件读取。
+   - merge 失败时回退到原始记录直出。
+   - 熔断器跳过、冷却和恢复行为。
+   - 一个快源 + 一个慢源时，搜索预算是否能保护整体响应时间。
 
-1. Verify the 6-second search budget
+## 优先级 1：验证性能语义
 
-   `_query_all_sources()` uses `wait(..., timeout=SEARCH_BUDGET_SECONDS)` and calls `pool.shutdown(wait=False)`, but it is still inside a `ThreadPoolExecutor` context manager. Add a regression test proving an unfinished slow source cannot make the caller wait beyond the configured budget.
+性能优化阶段已经降低尾延迟风险，但还有两个实现语义需要用测试证明。
 
-   If the test shows the context manager still waits for pending work, replace the `with ThreadPoolExecutor(...)` block with explicit executor lifecycle management.
+1. 验证 6 秒搜索预算
 
-2. Reconcile source timeout constants
+   `_query_all_sources()` 当前使用 `wait(..., timeout=SEARCH_BUDGET_SECONDS)`，并调用 `pool.shutdown(wait=False)`，但外层仍处于 `ThreadPoolExecutor` context manager 中。需要新增回归测试，证明未完成的慢源不会让调用方继续等待超过配置预算。
 
-   `SOURCE_TIMEOUT = 4` is configured in `MultiSource.py`, but individual sources still have their own timeout constants such as `DOUBAN_TIMEOUT = 8`, `DANGDANG_TIMEOUT = 10`, `OL_TIMEOUT = 10`, `GB_TIMEOUT = 8`, and `WEREAD_TIMEOUT = 8`.
+   如果测试证明 context manager 仍会等待未完成任务，应将线程池改为显式生命周期管理，避免预算被绕过。
 
-   Decide whether source modules should keep local timeouts or accept scheduler-provided timeout settings. Do not refactor this until the budget regression test exists.
+2. 梳理源级 timeout 常量
 
-## Priority 2: Proxy Strategy Cleanup
+   `MultiSource.py` 中配置了 `SOURCE_TIMEOUT = 4`，但各数据源仍保留自己的 timeout，例如：
 
-The project currently has two proxy-selection patterns:
+   - `DOUBAN_TIMEOUT = 8`
+   - `DANGDANG_TIMEOUT = 10`
+   - `OL_TIMEOUT = 10`
+   - `GB_TIMEOUT = 8`
+   - `WEREAD_TIMEOUT = 8`
 
-- `get_proxies()` uses TCP port probing and cached primary/backup selection.
-- `probe_best_proxy()` uses HTTP requests against a target URL to compare direct/xray/clash latency.
+   下一步应决定：源模块保留本地 timeout，还是接受调度层传入的 timeout。这个重构不要早于搜索预算回归测试。
 
-This differs from the operational rule that proxy health detection should avoid HTTP probing in normal search paths.
+## 优先级 2：统一代理策略
 
-Recommended direction:
+当前项目存在两套代理选择逻辑：
 
-1. Keep TCP probing as the production default.
-2. Move HTTP latency probing behind an explicit diagnostic function or flag.
-3. Update source modules to use one consistent production proxy API.
-4. Update the skill/documentation after the implementation is aligned.
+- `get_proxies()` 使用 TCP 端口探测，并缓存主备代理选择。
+- `probe_best_proxy()` 使用 HTTP 请求目标 URL，对 direct / xray / clash 做延迟比较。
 
-## Priority 3: Documentation Alignment
+这和运维约束“正常搜索路径尽量避免 HTTP 探测，降低触发 Calibre-Web 代理限制的风险”不完全一致。
 
-Keep operational documentation synchronized with the code.
+推荐方向：
 
-Required updates after fixes:
+1. 生产搜索路径默认使用 TCP 探测。
+2. HTTP 延迟探测如果保留，应放到显式诊断函数或开关后面。
+3. OpenLibrary / Google Books 等源统一使用同一个生产代理 API。
+4. 实现对齐后，同步更新 README、CHANGELOG 和 SKILL 记录。
 
-- README current status and known limitations.
-- CHANGELOG entries for bug fixes and test coverage.
-- Skill notes for proxy behavior, cover download behavior, and test status.
-- Performance plan status if budget semantics change.
+## 优先级 3：文档同步
 
-## Deferred Work
+行为修复后，需要保持文档和代码一致。
 
-These are intentionally not recommended for the next iteration.
+需要同步更新：
 
-1. Full async architecture
+- README 当前状态和已知限制。
+- CHANGELOG 修复记录和测试覆盖变化。
+- SKILL 中关于代理、封面下载、测试状态的说明。
+- 如果搜索预算语义发生变化，同步更新性能优化计划文档。
 
-   Calibre-Web's metadata provider interface is synchronous. Async internals would add complexity without proving that the UI can consume incremental results.
+## 暂缓事项
 
-2. Persistent cache
+以下方向暂不建议作为下一阶段工作。
 
-   Phase 3 was skipped for a good reason: single-user usage has low repeated-query volume. Persistent cache adds state, invalidation, and filesystem concerns.
+1. 全量异步架构
 
-3. Large module extraction
+   Calibre-Web metadata provider 接口本身是同步返回结果列表。除非验证 UI 支持增量更新，否则异步内部实现会显著增加复杂度，但收益不明确。
 
-   `MultiSource.py` is somewhat large, but not yet the main risk. Extract modules only after tests cover the current behavior.
+2. 持久化缓存
 
-4. More data sources
+   Phase 3 跳过是合理的。当前是单用户、低频搜索，重复查询命中率有限。持久化缓存会引入状态、失效策略和文件权限问题。
 
-   Current quality bottlenecks are source stability, timeout behavior, and merge correctness, not source count.
+3. 大规模模块拆分
 
-## Suggested Execution Order
+   `MultiSource.py` 偏大，但目前还不是最大风险。应先补测试，再按真实复杂度决定是否拆出调度器、查询分类器或缓存模块。
 
-1. Fix `import os` in `MultiSource.py`.
-2. Fix the failing unit test and keep the suite green.
-3. Add regression tests for cover download, fallback, circuit breaker, and budget behavior.
-4. Validate whether the search budget is truly bounded.
-5. Simplify production proxy selection to one consistent strategy.
-6. Update README, CHANGELOG, and skill notes after behavior changes are verified.
+4. 继续增加数据源
+
+   当前瓶颈不是数据源数量，而是外部源稳定性、搜索预算语义、代理策略和合并正确性。
+
+## 建议执行顺序
+
+1. 修复 `MultiSource.py` 缺少 `import os` 的问题。
+2. 修复当前失败的单元测试，恢复测试全绿。
+3. 补充封面下载、fallback、熔断器、搜索预算回归测试。
+4. 验证搜索预算是否真正有边界。
+5. 将生产代理选择简化为一致策略。
+6. 行为验证后，更新 README、CHANGELOG 和 SKILL 记录。

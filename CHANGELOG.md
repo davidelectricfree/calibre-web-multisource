@@ -2,18 +2,18 @@
 
 All notable changes to Calibre-Web MultiSource.
 
-## [2026-08-10] Architecture Review Roadmap
+## [2026-08-10] 架构复盘 Roadmap
 
-### Docs
-- Added `ROADMAP.md` with post-optimization architecture assessment and execution priorities.
-- Updated `README.md` with current status and roadmap entry points.
-- Updated `docs/performance-optimization-plan.md` with a post-review note linking to the roadmap.
+### 文档
+- 新增中文版 `ROADMAP.md`，记录性能优化后的架构判断和后续执行优先级。
+- 更新 `README.md`，增加当前状态和 roadmap 入口。
+- 更新 `docs/performance-optimization-plan.md`，增加复盘备注并链接到 roadmap。
 
-### Review Findings Captured
-- `MultiSource.py` needs an `import os` fix for the Douban cover Cookie branch.
-- Unit test baseline currently has 1 failing test and should be restored before behavior changes.
-- Search budget behavior needs a regression test to prove slow sources cannot bypass the configured wait limit.
-- Production proxy probing strategy should be reconciled: TCP probing for normal search paths, HTTP probing only for diagnostics if kept.
+### 复盘结论记录
+- `MultiSource.py` 需要补 `import os`，否则豆瓣封面 Cookie 分支可能触发 `NameError`。
+- 当前单元测试基线有 1 个失败，应在继续改行为前恢复测试全绿。
+- 搜索预算行为需要回归测试，证明慢源不会绕过配置的等待预算。
+- 生产代理探测策略需要统一：正常搜索路径使用 TCP 探测；HTTP 探测如保留，应只作为诊断能力。
 
 ## [2026-08-09] Performance Optimization Sprint
 
