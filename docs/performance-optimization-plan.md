@@ -2,7 +2,7 @@
 
 > **Implementation Status**: Phase 0 ✅ | Phase 1 ✅ | Phase 2 ✅ | Phase 3 ⏭️ | Phase 4 ✅ | Phase 5 ✅ — ALL DONE
 >
-> **复盘备注（2026-08-10）**：性能优化阶段已经实现，但继续做功能改动前仍需完成后续质量工作：修复豆瓣封面 `os` 导入问题，恢复单元测试基线，补充搜索预算行为回归测试，并统一生产代理探测策略。详见 [../ROADMAP.md](../ROADMAP.md)。
+> **复盘备注（2026-08-10）**：性能优化阶段已经实现。P0 修复了搜索预算绕过 Bug（`ThreadPoolExecutor` context manager 隐式 `shutdown(wait=True)` 绕过 `wait()` timeout）。P1 删除了死代码 `SOURCE_TIMEOUT`。P2 统一了代理策略为 TCP-only。详见 [../ROADMAP.md](../ROADMAP.md)。
 
 ## Background
 

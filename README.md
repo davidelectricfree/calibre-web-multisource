@@ -4,7 +4,11 @@
 
 ## 当前状态
 
-性能优化 Phase 1/2/4/5 已完成：搜索预算、中文查询源选择、源熔断器、ISBN 级联限制均已落地。项目当前不建议大重构，后续重点是修复明确 bug、恢复测试基线、验证搜索预算语义和统一代理策略。
+性能优化 Phase 1/2/4/5 及架构复盘 P0-P2 已完成：
+- **P0**：修复 import os 缺失 + 搜索预算绕过 Bug + 12 项回归测试
+- **P1**：删除死代码 `SOURCE_TIMEOUT` + 源 timeout 健康检查
+- **P2**：统一代理策略为 TCP-only，`probe_best_proxy()` 由 `PROXY_DIAGNOSTIC_ENABLED` 控制
+- 单元测试覆盖 28 项全部通过
 
 详细后续计划见 [ROADMAP.md](ROADMAP.md)。历史性能优化方案见 [docs/performance-optimization-plan.md](docs/performance-optimization-plan.md)。
 
@@ -21,7 +25,7 @@
 - **封面代理**: 解决豆瓣防盗链问题
 - **API Key 热更新**: 豆瓣 Cookie、Google Books API Key、微信读书 API Key 通过文件读取，修改后无需重启容器；无 key 文件时对应数据源优雅降级
 - **可配置**: 通过顶部常量控制源开关、超时、并发数
-- **搜索预算** (Phase 1): 配置 6s 全局等待预算，慢源超时自动跳过；硬边界语义仍需回归测试验证
+- **搜索预算** (Phase 1): 配置 6s 全局等待预算，慢源超时自动跳过（已通过回归测试验证）
 - **智能源选择** (Phase 2): 中文搜索自动跳过 OpenLibrary、Google Books（省 6-40s 无效等待）
 
 ## 安装
@@ -75,7 +79,6 @@ CASCADE_MAX_RECORDS = 3          # Phase 5: 最多级联 N 个 ISBN
 
 # 搜索预算 (Phase 1)
 SEARCH_BUDGET_SECONDS = 6           # Phase1 全局等待上限
-SOURCE_TIMEOUT = 4                  # 单源超时
 SOURCE_RETRY_ENABLED = False        # 禁用自动重试
 
 # 源选择 (Phase 2)
