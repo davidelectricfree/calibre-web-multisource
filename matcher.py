@@ -439,17 +439,63 @@ class BookMatcher:
         return max(descs, key=len) if descs else ""
 
     def _pick_cover(self, records: List[BookRecord]) -> str:
-        """封面优先级：豆瓣 > 当当 > 微信读书 > Google Books > OpenLibrary > shlibrary"""
-        priority = ["douban", "dangdang", "weread", "googlebooks", "openlibrary", "shlibrary"]
-        for src in priority:
-            for r in records:
-                if r.source_id == src and r.cover_url:
-                    return r.cover_url
-        # 任何源的封面都可以
-        for r in records:
-            if r.cover_url:
-                return r.cover_url
-        return ""
+        """基于文件大小的封面质量选择。
+        多个源都有封面时，并发 HEAD 请求比较 Content-Length，选最大文件。
+        仅一个源有封面或全部 HEAD 失败时，直接返回唯一可用封面。"""
+        candidates = [(r.cover_url, r.source_id) for r in records
+                      if r.cover_url and r.cover_url.strip()]
+        if not candidates:
+            return ""
+        if len(candidates) == 1:
+            return candidates[0][0]
+        return self._pick_best_cover_by_size(candidates)
+
+    def _pick_best_cover_by_size(self, candidates: List[tuple]) -> str:
+        """并发 HEAD 请求比较封面文件大小，返回最大的 URL。
+        全部失败则返回第一个候选。超时 2s 避免阻塞。"""
+        import requests
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        results = []  # (size, url)
+
+        def _check_size(url):
+            try:
+                resp = requests.head(url, timeout=2, verify=False,
+                                     headers={"User-Agent": "CalibreWeb/1.0"})
+                if resp.status_code == 200:
+                    cl = resp.headers.get("Content-Length", "0")
+                    return (int(cl), url)
+            except Exception:
+                pass
+            # HEAD 不支持时 fallback GET Range
+            try:
+                resp = requests.get(url, timeout=2, verify=False,
+                                    headers={"User-Agent": "CalibreWeb/1.0",
+                                             "Range": "bytes=0-0"})
+                if resp.status_code in (200, 206):
+                    cr = resp.headers.get("Content-Range", "")
+                    # "bytes 0-0/12345" → 12345
+                    if "/" in cr:
+                        total = cr.rsplit("/", 1)[-1]
+                        return (int(total), url)
+            except Exception:
+                pass
+            return None
+
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            futures = {pool.submit(_check_size, url): url
+                       for url, _ in candidates}
+            for future in as_completed(futures):
+                result = future.result()
+                if result:
+                    results.append(result)
+
+        if results:
+            results.sort(key=lambda x: x[0], reverse=True)
+            return results[0][1]
+
+        # 全部失败，兜底返回第一个
+        return candidates[0][0]
 
     def _pick_rating(self, records: List[BookRecord]) -> float:
         for r in records:

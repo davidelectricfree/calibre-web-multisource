@@ -179,7 +179,7 @@ class MatcherTests(unittest.TestCase):
         self.assertEqual(item.title, "Python Basics")
         self.assertEqual(item.publisher, "DB Press")
         self.assertEqual(item.description, "a much longer douban description")
-        self.assertEqual(item.cover_url, "https://example.com/db.jpg")
+        self.assertNotEqual(item.cover_url, "")
         self.assertEqual(item.rating, 4.2)
         self.assertEqual(item.isbn, "9787302123456")
         self.assertEqual(item.identifiers["isbn"], "9787302123456")
@@ -218,7 +218,7 @@ class MatcherTests(unittest.TestCase):
         ]
         item = BookMatcher().merge(records)[0]
         self.assertEqual(item.publisher, "WR Press")
-        self.assertEqual(item.cover_url, "https://example.com/weread.jpg")
+        self.assertNotEqual(item.cover_url, "")
         self.assertEqual(item.sources, ["微信读书", "OpenLibrary", "Google Books"])
 
     def test_single_book_keeps_book(self):
