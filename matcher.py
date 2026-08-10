@@ -439,15 +439,27 @@ class BookMatcher:
         return max(descs, key=len) if descs else ""
 
     def _pick_cover(self, records: List[BookRecord]) -> str:
-        """基于文件大小的封面质量选择。
-        多个源都有封面时，并发 HEAD 请求比较 Content-Length，选最大文件。
-        仅一个源有封面或全部 HEAD 失败时，直接返回唯一可用封面。"""
+        """封面选择：优先选主文本源（第一条有 publisher 的记录）的封面以保版本一致；
+        若该源无封面，则回退到跨源文件大小比较。"""
         candidates = [(r.cover_url, r.source_id) for r in records
                       if r.cover_url and r.cover_url.strip()]
         if not candidates:
             return ""
         if len(candidates) == 1:
             return candidates[0][0]
+
+        # 版本一致性优先：主文本源的封面
+        primary_source = None
+        for r in records:
+            if r.publisher and r.publisher.strip():
+                primary_source = r.source_id
+                break
+        if primary_source:
+            for url, src in candidates:
+                if src == primary_source:
+                    return url
+
+        # 回退：文件大小比较
         return self._pick_best_cover_by_size(candidates)
 
     def _pick_best_cover_by_size(self, candidates: List[tuple]) -> str:
