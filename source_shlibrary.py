@@ -210,7 +210,7 @@ class ShanghaiLibrarySource:
         return publisher, pub_date, isbn
 
     def _parse_table_fields(self, html: str) -> dict:
-        """解析 HTML table 中的字段（Pages, CLC, Description）"""
+        """解析 HTML table 中的字段。兼容中文和英文两种标签风格。"""
         result = {
             "description": "",
             "pages": "",
@@ -218,39 +218,49 @@ class ShanghaiLibrarySource:
             "language": "",
         }
 
-        # Contents / 内容提要
-        m = re.search(r"<th>Contents:</th>\s*<td>\s*(.*?)\s*</td>", html, re.DOTALL)
-        if m:
-            desc = m.group(1)
-            # 去除 HTML 标签
-            desc = re.sub(r"<[^>]+>", " ", desc)
-            desc = re.sub(r"\s+", " ", desc).strip()
-            if len(desc) > 10:
-                result["description"] = desc
+        # Description — 附注 (CN) / Contents (EN)
+        for label in ("附注:", "Contents:"):
+            m = re.search(
+                rf"<th>{label}</th>\s*<td>\s*(.*?)\s*</td>", html, re.DOTALL)
+            if m:
+                desc = re.sub(r"<[^>]+>", " ", m.group(1))
+                desc = re.sub(r"\s+", " ", desc).strip()
+                if len(desc) > 10:
+                    result["description"] = desc
+                break
 
-        # Carrier Form / 载体形态（含页数）
-        m = re.search(r"<th>Carrier Form:</th>\s*<td>\s*(.*?)\s*</td>", html, re.DOTALL)
-        if m:
-            cf = re.sub(r"<[^>]+>", " ", m.group(1)).strip()
-            page_match = re.search(r"(\d+)\s*页", cf)
-            if page_match:
-                result["pages"] = page_match.group(1)
+        # Pages — 载体形态 (CN) / Carrier Form (EN)
+        for label in ("载体形态:", "Carrier Form:"):
+            m = re.search(
+                rf"<th>{label}</th>\s*<td>\s*(.*?)\s*</td>", html, re.DOTALL)
+            if m:
+                cf = re.sub(r"<[^>]+>", " ", m.group(1)).strip()
+                page_match = re.search(r"(\d+)\s*页", cf)
+                if page_match:
+                    result["pages"] = page_match.group(1)
+                break
 
-        # Subjects
-        m = re.search(r"<th>Subjects:</th>\s*<td>\s*(.*?)\s*</td>", html, re.DOTALL)
-        if m:
-            subj_html = m.group(1)
-            subjects = re.findall(r">\s*([^<]+)\s*<", subj_html)
-            result["subjects"] = [s.strip() for s in subjects if s.strip()]
+        # Subjects — 主题 (CN) / Subjects (EN)
+        for label in ("主题:", "Subjects:"):
+            m = re.search(
+                rf"<th>{label}</th>\s*<td>\s*(.*?)\s*</td>", html, re.DOTALL)
+            if m:
+                subj_html = m.group(1)
+                subjects = re.findall(r">\s*([^<]+)\s*<", subj_html)
+                result["subjects"] = [s.strip() for s in subjects if s.strip()]
+                break
 
-        # Language
-        m = re.search(r"<th>Language:</th>\s*<td>\s*(.*?)\s*</td>", html, re.DOTALL)
-        if m:
-            lang = re.sub(r"<[^>]+>", "", m.group(1)).strip()
-            if lang.lower() in ("chi", "chinese", "中文"):
-                result["language"] = "中文"
-            elif lang:
-                result["language"] = lang
+        # Language — 语言 (CN) / Language (EN)
+        for label in ("语言:", "Language:"):
+            m = re.search(
+                rf"<th>{label}</th>\s*<td>\s*(.*?)\s*</td>", html, re.DOTALL)
+            if m:
+                lang = re.sub(r"<[^>]+>", "", m.group(1)).strip()
+                if lang.lower() in ("chi", "chinese", "中文"):
+                    result["language"] = "中文"
+                elif lang:
+                    result["language"] = lang
+                break
 
         return result
 
