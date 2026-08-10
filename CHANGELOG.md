@@ -2,6 +2,19 @@
 
 All notable changes to Calibre-Web MultiSource.
 
+## [2026-08-10] Architecture Review Roadmap
+
+### Docs
+- Added `ROADMAP.md` with post-optimization architecture assessment and execution priorities.
+- Updated `README.md` with current status and roadmap entry points.
+- Updated `docs/performance-optimization-plan.md` with a post-review note linking to the roadmap.
+
+### Review Findings Captured
+- `MultiSource.py` needs an `import os` fix for the Douban cover Cookie branch.
+- Unit test baseline currently has 1 failing test and should be restored before behavior changes.
+- Search budget behavior needs a regression test to prove slow sources cannot bypass the configured wait limit.
+- Production proxy probing strategy should be reconciled: TCP probing for normal search paths, HTTP probing only for diagnostics if kept.
+
 ## [2026-08-09] Performance Optimization Sprint
 
 ### Fix: Douban Cover Download

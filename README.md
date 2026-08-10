@@ -2,6 +2,12 @@
 
 多源书籍元数据聚合插件，整合 **豆瓣 + 当当 + 微信读书 + Open Library + Google Books** 五个数据源，通过三层防错机制智能合并结果。
 
+## 当前状态
+
+性能优化 Phase 1/2/4/5 已完成：搜索预算、中文查询源选择、源熔断器、ISBN 级联限制均已落地。项目当前不建议大重构，后续重点是修复明确 bug、恢复测试基线、验证搜索预算语义和统一代理策略。
+
+详细后续计划见 [ROADMAP.md](ROADMAP.md)。历史性能优化方案见 [docs/performance-optimization-plan.md](docs/performance-optimization-plan.md)。
+
 ## 特性
 
 - **五源聚合**: 同时从豆瓣、当当、微信读书、Open Library、Google Books 拉取元数据
@@ -15,7 +21,7 @@
 - **封面代理**: 解决豆瓣防盗链问题
 - **API Key 热更新**: 豆瓣 Cookie、Google Books API Key、微信读书 API Key 通过文件读取，修改后无需重启容器；无 key 文件时对应数据源优雅降级
 - **可配置**: 通过顶部常量控制源开关、超时、并发数
-- **搜索预算** (Phase 1): 全局 6s 硬上限，慢源超时自动跳过
+- **搜索预算** (Phase 1): 配置 6s 全局等待预算，慢源超时自动跳过；硬边界语义仍需回归测试验证
 - **智能源选择** (Phase 2): 中文搜索自动跳过 OpenLibrary、Google Books（省 6-40s 无效等待）
 
 ## 安装

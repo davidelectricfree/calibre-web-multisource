@@ -1,6 +1,8 @@
 # Calibre-Web MultiSource Search Performance Optimization Plan
 
 > **Implementation Status**: Phase 0 ✅ | Phase 1 ✅ | Phase 2 ✅ | Phase 3 ⏭️ | Phase 4 ✅ | Phase 5 ✅ — ALL DONE
+>
+> **Post-review note (2026-08-10)**: The performance phases are implemented, but follow-up work remains before further feature changes: fix the Douban cover `os` import bug, restore the unit test baseline, add regression tests for search budget behavior, and reconcile the production proxy probing strategy. See [../ROADMAP.md](../ROADMAP.md).
 
 ## Background
 
