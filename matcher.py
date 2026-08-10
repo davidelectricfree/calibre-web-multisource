@@ -296,7 +296,8 @@ class BookMatcher:
         publisher = self._pick_by_priority(sorted_records, "publisher")
         published_date = self._pick_by_priority(sorted_records, "published_date")
         description = self._pick_description(sorted_records)
-        cover_url = self._pick_cover(sorted_records)
+        isbn = self._pick_isbn(sorted_records)
+        cover_url = self._pick_cover(sorted_records, isbn)
         rating = self._pick_rating(sorted_records)
         tags = self._merge_tags(sorted_records)
         series = self._pick_by_priority(sorted_records, "series")
@@ -304,7 +305,6 @@ class BookMatcher:
         pages = self._pick_pages(sorted_records)
         clc_code = self._pick_clc(sorted_records)
         url = self._pick_by_priority(sorted_records, "url")
-        isbn = self._pick_isbn(sorted_records)
         series_index = self._pick_by_priority(sorted_records, "series_index")
 
         # 合并 identifiers
@@ -438,29 +438,31 @@ class BookMatcher:
         descs = [r.description.strip() for r in records if r.description and r.description.strip()]
         return max(descs, key=len) if descs else ""
 
-    def _pick_cover(self, records: List[BookRecord]) -> str:
-        """封面选择：优先选主文本源（第一条有 publisher 的记录）的封面以保版本一致；
-        若该源无封面，则回退到跨源文件大小比较。"""
-        candidates = [(r.cover_url, r.source_id) for r in records
-                      if r.cover_url and r.cover_url.strip()]
+    def _pick_cover(self, records: List[BookRecord], unified_isbn: str = "") -> str:
+        """封面选择：优先同 ISBN 版本，再按文件大小选最优。
+        同 ISBN 保证封面与文本元数据来自同一版本，避免不同版本混搭。"""
+        candidates = [(r.cover_url, r.source_id, r.get_normalized_isbn())
+                      for r in records if r.cover_url and r.cover_url.strip()]
         if not candidates:
             return ""
         if len(candidates) == 1:
             return candidates[0][0]
 
-        # 版本一致性优先：主文本源的封面
-        primary_source = None
-        for r in records:
-            if r.publisher and r.publisher.strip():
-                primary_source = r.source_id
-                break
-        if primary_source:
-            for url, src in candidates:
-                if src == primary_source:
-                    return url
+        # 同 ISBN 优先
+        if unified_isbn:
+            same_isbn = [(url, src, isbn) for url, src, isbn in candidates
+                         if isbn == unified_isbn]
+            if same_isbn:
+                # 仅一个同 ISBN 候选 → 直接返回
+                if len(same_isbn) == 1:
+                    return same_isbn[0][0]
+                # 多个同 ISBN → 比大小
+                return self._pick_best_cover_by_size(
+                    [(url, src) for url, src, _ in same_isbn])
 
-        # 回退：文件大小比较
-        return self._pick_best_cover_by_size(candidates)
+        # 无统一 ISBN 或全部不同 → 跨源比大小
+        return self._pick_best_cover_by_size(
+            [(url, src) for url, src, _ in candidates])
 
     def _pick_best_cover_by_size(self, candidates: List[tuple]) -> str:
         """并发 HEAD 请求比较封面文件大小，返回最大的 URL。
