@@ -10,6 +10,7 @@ MultiSource — 多源聚合书籍元数据插件
   - 可配置：源开关、翻页条数、超时均可调整
   - 模块化：每个数据源独立文件，修改互不影响
 """
+import os
 import re
 import time
 import urllib.parse
@@ -322,12 +323,13 @@ class MultiSource(Metadata):
         all_records = []
         phase1_start = time.time()
 
-        with ThreadPoolExecutor(max_workers=len(sources)) as pool:
-            futures = {
-                pool.submit(self._query_source, source, query, is_isbn, request_id): source
-                for source in sources
-            }
+        pool = ThreadPoolExecutor(max_workers=len(sources))
+        futures = {
+            pool.submit(self._query_source, source, query, is_isbn, request_id): source
+            for source in sources
+        }
 
+        try:
             # Phase 1: 用 wait() 替代 as_completed()，全局超时硬限制
             done, not_done = wait(futures.keys(), timeout=SEARCH_BUDGET_SECONDS,
                                   return_when=ALL_COMPLETED)
@@ -373,7 +375,7 @@ class MultiSource(Metadata):
             if unused:
                 log.warning(f"[MultiSource][{request_id}] 搜索预算耗尽"
                             f"({SEARCH_BUDGET_SECONDS}s)，跳过: {unused}")
-
+        finally:
             # shutdown(wait=False): 不等待 pending futures，避免搜索预算被绕过
             pool.shutdown(wait=False)
 
@@ -431,20 +433,21 @@ class MultiSource(Metadata):
         all_records = []
         started_at = {}
 
-        with ThreadPoolExecutor(max_workers=len(self._cascade_sources) + 5) as pool:
-            futures = {}
-            for source in self._cascade_sources:
-                if hasattr(source, 'search_by_isbns'):
-                    future = pool.submit(source.search_by_isbns, isbns)
-                    futures[future] = source.SOURCE_NAME
+        pool = ThreadPoolExecutor(max_workers=len(self._cascade_sources) + 5)
+        futures = {}
+        for source in self._cascade_sources:
+            if hasattr(source, 'search_by_isbns'):
+                future = pool.submit(source.search_by_isbns, isbns)
+                futures[future] = source.SOURCE_NAME
+                started_at[future] = time.time()
+            else:
+                limited = isbns[:CASCADE_LIMIT_GOOGLE]
+                for isbn in limited:
+                    future = pool.submit(source.search, isbn, True)
+                    futures[future] = f"{source.SOURCE_NAME}({isbn})"
                     started_at[future] = time.time()
-                else:
-                    limited = isbns[:CASCADE_LIMIT_GOOGLE]
-                    for isbn in limited:
-                        future = pool.submit(source.search, isbn, True)
-                        futures[future] = f"{source.SOURCE_NAME}({isbn})"
-                        started_at[future] = time.time()
 
+        try:
             done, not_done = wait(futures.keys(), timeout=CASCADE_TIMEOUT,
                                    return_when=ALL_COMPLETED)
             for future in done:
@@ -460,7 +463,7 @@ class MultiSource(Metadata):
             for future in not_done:
                 label = futures[future]
                 log.warning(f"[MultiSource][{request_id}] {label} 级联超时({CASCADE_TIMEOUT}s)，跳过")
-
+        finally:
             pool.shutdown(wait=False)
 
         return all_records

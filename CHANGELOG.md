@@ -4,15 +4,24 @@ All notable changes to Calibre-Web MultiSource.
 
 ## [2026-08-10] 架构复盘 Roadmap
 
+### P0 正确性修复
+- **Fixed** `MultiSource.py` 缺少 `import os` — 豆瓣封面 Cookie 读取路径触发 `NameError`
+- **Fixed** 搜索预算被 `ThreadPoolExecutor` context manager 绕过 — `_query_all_sources()` 和 `_query_isbn_cascade()` 移除 `with` context manager，改用显式 `try/finally pool.shutdown(wait=False)`，确保慢源不阻塞返回
+- **Fixed** 单元测试 `test_search_returns_raw_records_when_merge_fails` — 补 `circuit_breaker = None`（Phase 4 新增字段未设置）
+- **Added** 25 项单元测试（13 → 25），含 3 个新测试类：
+  - `CoverProxyTests`: 封面请求参数生成 + 域名检测（4 项）
+  - `CircuitBreakerTests`: 熔断器 skip/cooldown/half_open 全状态（5 项）
+  - `SearchBudgetTests`: 搜索预算边界保护（3 项）
+
 ### 文档
 - 新增中文版 `ROADMAP.md`，记录性能优化后的架构判断和后续执行优先级。
 - 更新 `README.md`，增加当前状态和 roadmap 入口。
 - 更新 `docs/performance-optimization-plan.md`，增加复盘备注并链接到 roadmap。
 
 ### 复盘结论记录
-- `MultiSource.py` 需要补 `import os`，否则豆瓣封面 Cookie 分支可能触发 `NameError`。
-- 当前单元测试基线有 1 个失败，应在继续改行为前恢复测试全绿。
-- 搜索预算行为需要回归测试，证明慢源不会绕过配置的等待预算。
+- `MultiSource.py` 需要补 `import os`，否则豆瓣封面 Cookie 分支可能触发 `NameError`。 ✅ 已修复
+- 当前单元测试基线有 1 个失败，应在继续改行为前恢复测试全绿。 ✅ 已修复
+- 搜索预算行为需要回归测试，证明慢源不会绕过配置的等待预算。 ✅ 已修复 + 测试验证
 - 生产代理探测策略需要统一：正常搜索路径使用 TCP 探测；HTTP 探测如保留，应只作为诊断能力。
 
 ## [2026-08-09] Performance Optimization Sprint

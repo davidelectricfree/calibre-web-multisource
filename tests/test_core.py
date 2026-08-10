@@ -243,6 +243,7 @@ class MultiSourceFallbackTests(unittest.TestCase):
         provider.active = True
         provider.sources = [source]
         provider._cascade_sources = []
+        provider.circuit_breaker = None
         provider.matcher = types.SimpleNamespace(merge=mock.Mock(side_effect=RuntimeError("merge failed")))
 
         with mock.patch.object(multisource_mod.proxy_manager, "get_proxies", return_value=None), \
@@ -293,6 +294,202 @@ class SourceProxyCacheTests(unittest.TestCase):
             self.assertEqual(source._get_best_proxies(), {"http": "first"})
             self.assertEqual(source._get_best_proxies(), {"http": "first"})
             self.assertEqual(source._get_best_proxies(), {"http": "second"})
+
+
+class CoverProxyTests(unittest.TestCase):
+    def setUp(self):
+        self._get_params = multisource_mod._get_cover_request_params
+        self._is_external = multisource_mod._is_external_cover
+
+    def test_external_cover_detection(self):
+        """_is_external_cover() 正确识别外部封面域名"""
+        self.assertTrue(self._is_external(
+            "https://img2.doubanio.com/view/subject/l/public/s1234567.jpg"))
+        self.assertTrue(self._is_external(
+            "https://books.google.com/books/content?id=abc"))
+        self.assertTrue(self._is_external(
+            "https://covers.openlibrary.org/b/id/12345-L.jpg"))
+        self.assertFalse(self._is_external(
+            "https://example.com/cover.jpg"))
+        self.assertFalse(self._is_external(""))
+
+    @mock.patch("calibre_web_multisource_testpkg.MultiSource.os.path.exists")
+    @mock.patch("builtins.open", new_callable=mock.mock_open,
+                 read_data="dbcl2=abc123; bid=xyz")
+    def test_cover_request_params_with_cookie_file(self, mock_open, mock_exists):
+        """豆瓣封面 + douban_cookie.txt 存在时，返回 Cookie 和 Referer"""
+        mock_exists.return_value = True
+        headers, proxies = self._get_params(
+            "https://img2.doubanio.com/view/subject/l/public/s1234567.jpg")
+        self.assertEqual(proxies, {"http": None, "https": None})
+        self.assertEqual(headers.get("Referer"), "https://book.douban.com/")
+        self.assertEqual(headers.get("Cookie"), "dbcl2=abc123; bid=xyz")
+
+    @mock.patch("calibre_web_multisource_testpkg.MultiSource.os.path.exists")
+    def test_cover_request_params_without_cookie_file(self, mock_exists):
+        """豆瓣封面 + douban_cookie.txt 不存在时，只有 Referer 不含 Cookie"""
+        mock_exists.return_value = False
+        headers, proxies = self._get_params(
+            "https://img2.doubanio.com/view/subject/l/public/s1234567.jpg")
+        self.assertEqual(proxies, {"http": None, "https": None})
+        self.assertEqual(headers.get("Referer"), "https://book.douban.com/")
+        self.assertNotIn("Cookie", headers)
+
+    def test_cover_request_params_non_douban_url(self):
+        """非豆瓣封面 URL 返回默认 headers（含 User-Agent, Referer）+ None proxies，不含 Cookie"""
+        headers, proxies = self._get_params(
+            "https://books.google.com/books/content?id=abc")
+        self.assertIsNone(proxies)
+        self.assertNotIn("Cookie", headers)
+        self.assertIn("User-Agent", headers)
+
+
+class CircuitBreakerTests(unittest.TestCase):
+    def setUp(self):
+        self.cb = multisource_mod.source_health.CircuitBreaker(
+            threshold=3, cooldown=300)
+
+    def test_skip_after_consecutive_failures(self):
+        """连续失败 3 次后 should_skip() 返回 True"""
+        self.assertFalse(self.cb.should_skip("test_source"))
+        self.cb.record_failure("test_source")
+        self.cb.record_failure("test_source")
+        self.assertFalse(self.cb.should_skip("test_source"))
+        self.cb.record_failure("test_source")
+        self.assertTrue(self.cb.should_skip("test_source"))
+
+    def test_success_resets_failure_count(self):
+        """失败后成功 → 计数归零"""
+        self.cb.record_failure("test_source")
+        self.cb.record_failure("test_source")
+        self.cb.record_success("test_source")
+        self.assertEqual(self.cb._failures["test_source"], 0)
+        self.assertFalse(self.cb.should_skip("test_source"))
+
+    @mock.patch.object(multisource_mod.source_health.time, "time")
+    def test_cooldown_expires_allows_probe(self, mock_time):
+        """熔断冷却到期后 → should_skip() 返回 False（half_open）"""
+        mock_time.return_value = 100.0
+        for _ in range(3):
+            self.cb.record_failure("test_source")
+        self.assertTrue(self.cb.should_skip("test_source"))
+        # 冷却到期
+        mock_time.return_value = 100.0 + 300.0 + 1.0
+        self.assertFalse(self.cb.should_skip("test_source"))
+
+    @mock.patch.object(multisource_mod.source_health.time, "time")
+    def test_half_open_success_closes_circuit(self, mock_time):
+        """half_open 探测成功 → 状态回到 closed"""
+        mock_time.return_value = 100.0
+        for _ in range(3):
+            self.cb.record_failure("test_source")
+        mock_time.return_value = 100.0 + 300.0 + 1.0
+        self.assertFalse(self.cb.should_skip("test_source"))  # half_open
+        self.cb.record_success("test_source")
+        self.assertFalse(self.cb.should_skip("test_source"))
+        self.assertEqual(self.cb._failures["test_source"], 0)
+
+    @mock.patch.object(multisource_mod.source_health.time, "time")
+    def test_half_open_failure_reopens_circuit(self, mock_time):
+        """half_open 探测失败 → 再次熔断"""
+        mock_time.return_value = 100.0
+        for _ in range(3):
+            self.cb.record_failure("test_source")
+        mock_time.return_value = 100.0 + 300.0 + 1.0
+        self.assertFalse(self.cb.should_skip("test_source"))  # half_open
+        opened = self.cb.record_failure("test_source")  # 再次失败
+        self.assertTrue(opened)
+        self.assertTrue(self.cb.should_skip("test_source"))
+
+
+class SearchBudgetTests(unittest.TestCase):
+    def setUp(self):
+        self.provider = multisource_mod.MultiSource.__new__(
+            multisource_mod.MultiSource)
+        self.provider.active = True
+        self.provider._cascade_sources = []
+        self.provider.circuit_breaker = None
+        self._budget = multisource_mod.SEARCH_BUDGET_SECONDS
+
+    def tearDown(self):
+        multisource_mod.SEARCH_BUDGET_SECONDS = self._budget
+
+    def test_fast_source_completes_within_budget(self):
+        """快源在预算内完成，慢源被跳过，总耗时不超过预算+容忍值"""
+        import time as _time
+
+        def fast_search(query, is_isbn):
+            _time.sleep(0.1)
+            return [BookRecord(source_id="fast", source_name="Fast",
+                               title="Fast Book", isbn="9787302123456")]
+
+        def slow_search(query, is_isbn):
+            _time.sleep(10.0)
+            return [BookRecord(source_id="slow", source_name="Slow",
+                               title="Slow Book")]
+
+        fast_source = types.SimpleNamespace(
+            SOURCE_NAME="Fast", SOURCE_ID="fast", search=fast_search)
+        slow_source = types.SimpleNamespace(
+            SOURCE_NAME="Slow", SOURCE_ID="slow", search=slow_search)
+
+        self.provider.sources = [fast_source, slow_source]
+        multisource_mod.SEARCH_BUDGET_SECONDS = 2
+
+        t0 = _time.time()
+        records = self.provider._query_all_sources(
+            "test", False, "abc12345",
+            sources=[fast_source, slow_source])
+        elapsed = _time.time() - t0
+
+        # 快源结果正常返回
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].title, "Fast Book")
+        # 总耗时受预算约束（+1s 容忍值覆盖调度开销）
+        self.assertLess(elapsed, multisource_mod.SEARCH_BUDGET_SECONDS + 1.0)
+
+    def test_all_sources_complete_under_budget(self):
+        """所有源都在预算内完成，结果完整"""
+        import time as _time
+
+        def ok_search(query, is_isbn):
+            _time.sleep(0.1)
+            return [BookRecord(source_id="x", source_name="X",
+                               title="Book", isbn="9787302123456")]
+
+        src1 = types.SimpleNamespace(
+            SOURCE_NAME="S1", SOURCE_ID="s1", search=ok_search)
+        src2 = types.SimpleNamespace(
+            SOURCE_NAME="S2", SOURCE_ID="s2", search=ok_search)
+
+        self.provider.sources = [src1, src2]
+        multisource_mod.SEARCH_BUDGET_SECONDS = 5
+
+        records = self.provider._query_all_sources(
+            "test", False, "abc12345", sources=[src1, src2])
+        self.assertEqual(len(records), 2)
+
+    def test_empty_result_when_all_sources_timeout(self):
+        """预算耗尽时所有源都没返回，返回空，总耗时不超过预算+容忍值"""
+        import time as _time
+
+        def slow_search(query, is_isbn):
+            _time.sleep(10.0)
+            return []
+
+        src = types.SimpleNamespace(
+            SOURCE_NAME="Slow", SOURCE_ID="slow", search=slow_search)
+
+        self.provider.sources = [src]
+        multisource_mod.SEARCH_BUDGET_SECONDS = 1
+
+        t0 = _time.time()
+        records = self.provider._query_all_sources(
+            "test", False, "abc12345", sources=[src])
+        elapsed = _time.time() - t0
+
+        self.assertEqual(len(records), 0)
+        self.assertLess(elapsed, multisource_mod.SEARCH_BUDGET_SECONDS + 1.0)
 
 
 if __name__ == "__main__":
