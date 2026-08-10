@@ -1,7 +1,7 @@
 """
 MultiSource — 多源聚合书籍元数据插件
 
-整合多个数据源（豆瓣、当当、微信读书、Open Library、Google Books，NLC 可选），通过三层防错机制
+整合多个数据源（豆瓣、当当、微信读书、Open Library、Google Books，上海图书馆 可选），通过三层防错机制
 （ISBN 精确匹配 → 复合指纹匹配 → 模糊匹配打分）智能合并结果。
 
 特性:
@@ -46,7 +46,7 @@ from . import proxy_manager
 from .book_record import BookRecord, MergedBook, canonical_isbn, normalize_date
 from .matcher import BookMatcher
 from .source_douban import DoubanSource
-from .source_nlc import NLCSource
+from .source_shlibrary import ShanghaiLibrarySource
 from .source_openlibrary import OpenLibrarySource
 from .source_dangdang import DangdangSource
 from .source_health import CircuitBreaker
@@ -85,7 +85,7 @@ PROVIDER_ID = "multisource"
 # 源开关：设为 False 可禁用某个数据源
 # 注意：NLC (国家图书馆) 和 OpenLibrary 从容器内访问经常超时/不可达，默认关闭
 SOURCE_DOUBAN_ENABLED = True
-SOURCE_NLC_ENABLED = False  # NLC 从 NAS 容器内不可达
+SOURCE_SHLIBRARY_ENABLED = True  # 上海图书馆 VuFind（替代 NLC）
 SOURCE_OPENLIBRARY_ENABLED = True
 SOURCE_DANGDANG_ENABLED = True
 SOURCE_WEREAD_ENABLED = True     # 微信读书（需 weread_apikey.txt）
@@ -148,8 +148,8 @@ class MultiSource(Metadata):
         self.sources = []
         if SOURCE_DOUBAN_ENABLED:
             self.sources.append(DoubanSource())
-        if SOURCE_NLC_ENABLED:
-            self.sources.append(NLCSource())
+        if SOURCE_SHLIBRARY_ENABLED:
+            self.sources.append(ShanghaiLibrarySource())
         if SOURCE_OPENLIBRARY_ENABLED:
             self.sources.append(OpenLibrarySource())
         if SOURCE_DANGDANG_ENABLED:

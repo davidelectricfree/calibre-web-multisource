@@ -62,7 +62,7 @@ def install_calibre_web_stubs():
 def install_source_stubs():
     source_classes = {
         "source_douban": "DoubanSource",
-        "source_nlc": "NLCSource",
+        "source_shlibrary": "ShanghaiLibrarySource",
         "source_dangdang": "DangdangSource",
         "source_weread": "WeReadSource",
     }
@@ -525,6 +525,7 @@ class SourceTimeoutHealthTests(unittest.TestCase):
         "source_googlebooks": {"GB_TIMEOUT": 8},
         "source_openlibrary": {"OL_TIMEOUT": 10},
         "source_weread": {"WEREAD_TIMEOUT": 8},
+        "source_shlibrary": {"SHL_TIMEOUT": 10},
     }
 
     def test_source_timeouts_not_less_than_budget(self):

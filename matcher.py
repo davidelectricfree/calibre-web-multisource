@@ -241,11 +241,10 @@ class BookMatcher:
         优先级规则：
           - 标题：取最常见的（最长、去重后唯一的）
           - 作者：合并所有源去重
-          - 出版社：优先豆瓣 > NLC > OpenLibrary
+          - 出版社：优先豆瓣 > shlibrary > OpenLibrary
           - 封面：优先豆瓣 > OpenLibrary
           - 评分：优先豆瓣
           - 简介：优先豆瓣，其次选非空最长的
-          - CLC：只用 NLC
           - ISBN：取所有源中最完整的
         """
         # 源优先级：中文商业/社区源优先，其次权威书目和国际源
@@ -253,7 +252,7 @@ class BookMatcher:
             "douban": 0,
             "dangdang": 1,
             "weread": 2,
-            "nlc": 3,
+            "shlibrary": 3,
             "openlibrary": 4,
             "googlebooks": 5,
             "jd": 6,
@@ -440,8 +439,8 @@ class BookMatcher:
         return max(descs, key=len) if descs else ""
 
     def _pick_cover(self, records: List[BookRecord]) -> str:
-        """封面优先级：豆瓣 > 当当 > 微信读书 > Google Books > OpenLibrary > NLC"""
-        priority = ["douban", "dangdang", "weread", "googlebooks", "openlibrary", "nlc"]
+        """封面优先级：豆瓣 > 当当 > 微信读书 > Google Books > OpenLibrary > shlibrary"""
+        priority = ["douban", "dangdang", "weread", "googlebooks", "openlibrary", "shlibrary"]
         for src in priority:
             for r in records:
                 if r.source_id == src and r.cover_url:
@@ -480,9 +479,9 @@ class BookMatcher:
         return 0
 
     def _pick_clc(self, records: List[BookRecord]) -> str:
-        """中图分类号只从 NLC 取"""
+        """中图分类号只从 shlibrary 取"""
         for r in records:
-            if r.source_id == "nlc" and r.clc_code:
+            if r.source_id == "shlibrary" and r.clc_code:
                 return r.clc_code
         return ""
 

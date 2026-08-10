@@ -4,6 +4,15 @@ All notable changes to Calibre-Web MultiSource.
 
 ## [2026-08-10] 架构复盘 Roadmap
 
+### 源替换: NLC → 上海图书馆
+- **Replaced** NLC（国家图书馆）源 → 上海图书馆 VuFind API (`vufind.library.sh.cn`)
+- **Added** `source_shlibrary.py` — API 搜索 + HTML 详情解析（COinS 元数据 + table 字段）
+- **Fields**: title, subtitle, authors, publisher, published_date, ISBN, description(Contents), pages, subjects, language
+- **Network**: 国内网站直连，不走代理
+- **Updated** `matcher.py`: source_priority / cover / CLC 中的 nlc → shlibrary
+- **Updated** `MultiSource.py`: 默认启用 shlibrary，替换 NLC 导入和实例化
+- **Retained** `source_nlc.py` — 保留文件作为代码参考，但不再被加载
+
 ### P2 统一代理策略
 - **Unified** 代理选择：生产搜索路径统一使用 `get_proxies()`（纯 TCP 端口探测），移除 OL/GB 中的 `probe_best_proxy()` HTTP 延迟探测调用
 - **Added** `PROXY_DIAGNOSTIC_ENABLED = False` 标志到 `proxy_manager.py` — HTTP 探测默认关闭，规避 cw_advocate 代理禁令；设为 True 可启用延迟诊断
