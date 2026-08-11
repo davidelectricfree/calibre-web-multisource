@@ -82,8 +82,8 @@ class ShanghaiLibrarySource:
                 authors = []
                 primary = r.get("authors", {}).get("primary", {})
                 for name, info in primary.items():
-                    # Strip birth year suffix like " 1963-"
-                    clean_name = re.sub(r"\s+\d{4}-$", "", name).strip()
+                    # Strip birth year suffix like "1963-" or " 1963-"
+                    clean_name = re.sub(r"[\s]*\d{4}-$", "", name).strip()
                     authors.append(clean_name)
 
                 # Extract subjects (flat list)
