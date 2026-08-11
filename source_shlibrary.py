@@ -189,6 +189,18 @@ class ShanghaiLibrarySource:
             if s not in tags:
                 tags.append(s)
 
+        # Identifiers — 书号字段
+        identifiers = {"shl_id": record_id}
+        call_number = table.get("call_number", "")
+        if call_number:
+            identifiers["shl_call_number"] = call_number
+        category = table.get("category", "")
+        if category:
+            identifiers["shl_category"] = category
+        carrier_form = table.get("carrier_form", "")
+        if carrier_form:
+            identifiers["shl_carrier"] = carrier_form
+
         record = BookRecord(
             source_id=self.SOURCE_ID,
             source_name=self.SOURCE_NAME,
@@ -206,7 +218,7 @@ class ShanghaiLibrarySource:
             clc_code=table.get("clc", ""),
             url=f"{SHL_RECORD_BASE}/{record_id}",
             raw_id=isbn or record_id,
-            identifiers={"shl_id": record_id},
+            identifiers=identifiers,
         )
         return record
 
@@ -219,6 +231,9 @@ class ShanghaiLibrarySource:
             "pub_date": "",
             "isbn": "",
             "clc": "",
+            "call_number": "",
+            "category": "",
+            "carrier_form": "",
             "description": "",
             "pages": "",
             "subjects": [],
@@ -256,6 +271,17 @@ class ShanghaiLibrarySource:
 
         # CLC
         result["clc"] = get_field("中图法", "CLC", "CLC:")
+
+        # Call number — 索书号 (CN)
+        result["call_number"] = get_field("索书号", "Call Number")
+
+        # Category — 分类 (CN)
+        result["category"] = get_field("分类", "Classification")
+
+        # Carrier form (full) — 载体形态 (CN)
+        cf = get_field("载体形态", "Carrier Form", "载体形态:")
+        if cf:
+            result["carrier_form"] = unescape(cf)
 
         # Description — 附注 (CN) / Contents (EN)
         desc = get_field("附注", "Contents", "附注:")
