@@ -1,17 +1,16 @@
 """
 MultiSource - 当当网数据源
-从 search.dangdang.com 爬取书籍元数据。
-当当网搜索结果页面直接包含完整 HTML，无需 JS 渲染。
+从 search.dangdang.com 和 product.dangdang.com 爬取书籍元数据。
+搜索页（page_index=1）获取列表 + 封面，详情页获取作者/出版社。
 """
 import re
 import time
 from typing import List, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
-from lxml import etree
 
 from .book_record import BookRecord, canonical_isbn
-
 
 # ============================================================
 # 配置
@@ -19,6 +18,7 @@ from .book_record import BookRecord, canonical_isbn
 DANGDANG_SEARCH_URL = "https://search.dangdang.com/"
 DANGDANG_PAGE_SIZE = 5
 DANGDANG_TIMEOUT = 10
+DANGDANG_DETAIL_WORKERS = 3
 
 DEFAULT_HEADERS = {
     "User-Agent": (
@@ -29,14 +29,7 @@ DEFAULT_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
 
-# 当当是国内站点，直连不走代理
 NO_PROXY = {"http": None, "https": None}
-
-# 作者名称角色标注清洗（含全角空格\u3000、不间断空格\u00a0）
-AUTHOR_CLEAN_PATTERN = re.compile(r'[，,。.\s\u3000\u00a0]*(著|编|译|主编|校|校译|编著|编译|编撰|等|绘|摄影|插图|绘制)\s*$')
-
-# ISBN 提取
-ISBN_PATTERN = re.compile(r'ISBN[：:]?\s*(\d[\d\-Xx]{9,16}\d)')
 
 
 # ============================================================
@@ -47,29 +40,26 @@ class DangdangSource:
     SOURCE_NAME = "当当"
 
     def search(self, query: str, is_isbn: bool = False) -> List[BookRecord]:
-        """搜索书籍"""
         if is_isbn:
             return self._search_by_isbn(query)
         return self._search_by_title(query)
 
     def _search_by_isbn(self, isbn_str: str) -> List[BookRecord]:
-        """通过 ISBN 搜索"""
         clean = canonical_isbn(isbn_str)
         if clean:
-            # 当当的 ISBN 搜索需要精确格式
-            return self._fetch_search_results(clean)
+            return self._search_products(clean)
         return []
 
     def _search_by_title(self, title: str) -> List[BookRecord]:
-        """通过标题搜索"""
-        return self._fetch_search_results(title)
+        return self._search_products(title)
 
-    def _fetch_search_results(self, query: str) -> List[BookRecord]:
-        """获取搜索结果并解析"""
+    def _search_products(self, query: str) -> List[BookRecord]:
+        """搜索并解析搜索结果 + 并发获取详情页"""
         try:
+            # 使用 page_index=1 参数确保获取产品数据
             resp = requests.get(
                 DANGDANG_SEARCH_URL,
-                params={"key": query, "act": "input"},
+                params={"key": query, "act": "input", "page_index": 1},
                 headers=DEFAULT_HEADERS,
                 timeout=DANGDANG_TIMEOUT,
                 proxies=NO_PROXY,
@@ -77,143 +67,174 @@ class DangdangSource:
             if resp.status_code != 200:
                 return []
 
-            # 当当使用 GBK 编码，解码后直接传给 etree
-            html_str = resp.content.decode("gbk", errors="replace")
-            return self._parse_search_results(html_str)
-
-        except Exception as e:
-            print(f"[Dangdang] 搜索失败: {e}")
-            return []
-
-    def _parse_search_results(self, html_str: str) -> List[BookRecord]:
-        """解析搜索结果页"""
-        try:
-            tree = etree.HTML(html_str)
+            html = resp.content.decode("gbk", errors="replace")
+            return self._parse_and_enrich(html)
         except Exception:
             return []
 
-        results = []
-        seen_ids = set()
+    def _parse_and_enrich(self, html: str) -> List[BookRecord]:
+        """解析搜索结果列表，并发抓取详情页补充作者/出版社/ISBN"""
+        # 提取产品列表
+        products = re.findall(
+            r'<li[^>]*class="line1"[^>]*id="p(\d+)"[^>]*>(.*?)</li>',
+            html, re.DOTALL
+        )
+        if not products:
+            return []
 
-        # 当当搜索结果容器：li[contains(@class,"line")]
-        items = tree.xpath('//li[contains(@class,"line")]')
-        for item in items[:DANGDANG_PAGE_SIZE]:
-            record = self._parse_item(item, seen_ids)
+        # 先解析基本字段，再并发获取详情
+        basic_records = []
+        for pid, item_html in products[:DANGDANG_PAGE_SIZE]:
+            record = self._parse_search_item(pid, item_html)
             if record:
-                results.append(record)
+                basic_records.append((pid, record))
 
-        return results
+        if not basic_records:
+            return []
 
-    def _parse_item(self, item, seen_ids: set) -> Optional[BookRecord]:
-        """解析单个搜索结果项"""
-        # 获取产品 ID
-        item_id = item.attrib.get("id", "").replace("p", "")
-        if item_id in seen_ids:
-            return None
+        # 并发获取详情页
+        enriched = []
+        with ThreadPoolExecutor(max_workers=DANGDANG_DETAIL_WORKERS) as pool:
+            futures = {
+                pool.submit(self._fetch_product_detail, pid, record): (pid, record)
+                for pid, record in basic_records
+            }
+            for future in as_completed(futures):
+                pid, base_record = futures[future]
+                try:
+                    result = future.result(timeout=DANGDANG_TIMEOUT)
+                    if result:
+                        enriched.append(result)
+                except Exception:
+                    enriched.append(base_record)
 
-        # 名称和链接
-        pic_link = item.xpath('.//a[@class="pic"]')
-        name_link = item.xpath('.//p[@class="name"]//a')
+        return enriched
 
+    def _parse_search_item(self, pid: str, item_html: str) -> Optional[BookRecord]:
+        """从搜索结果 li 中提取基本字段"""
+        # Title: from pic link title attribute
         title = ""
         url = ""
-        if pic_link:
-            title = pic_link[0].attrib.get("title", "").strip()
-            url = pic_link[0].attrib.get("href", "")
-        if not title and name_link:
-            title = name_link[0].attrib.get("title", "").strip()
-            if not title:
-                title = (name_link[0].text or "").strip()
-        if not url and name_link:
-            url = name_link[0].attrib.get("href", "")
+        m = re.search(r'<a[^>]*class="pic"[^>]*title="([^"]*)"', item_html)
+        if m:
+            title = m.group(1).strip()
+            # URL from same link
+            url_m = re.search(r'href="([^"]*)"', m.group(0))
+            if url_m:
+                url = url_m.group(1)
+                if url.startswith("//"):
+                    url = "https:" + url
+
+        if not title:
+            m = re.search(r'<p[^>]*class="name"[^>]*>.*?<a[^>]*title="([^"]*)"', item_html, re.DOTALL)
+            if m:
+                title = m.group(1).strip()
 
         if not title:
             return None
 
-        # 补全 URL
-        if url and url.startswith("//"):
-            url = "https:" + url
-        elif url and not url.startswith("http"):
-            url = "https:" + url
-
-        if item_id:
-            seen_ids.add(item_id)
+        title = self._clean_title(title)
 
         record = BookRecord(
             source_id=self.SOURCE_ID,
             source_name=self.SOURCE_NAME,
             title=title,
             url=url,
+            raw_id=pid,
         )
+        record.identifiers["dangdang_id"] = pid
 
-        # 封面
-        cover_imgs = item.xpath('.//a[@class="pic"]//img')
-        if cover_imgs:
-            cover = cover_imgs[0].attrib.get("data-original", "")
-            if not cover:
-                cover = cover_imgs[0].attrib.get("src", "")
-            if cover and cover.startswith("//"):
+        # Cover
+        m = re.search(r'<img[^>]*src=[\'"]([^\'"]+)[\'"]', item_html)
+        if m:
+            cover = m.group(1)
+            if cover.startswith("//"):
                 cover = "https:" + cover
             record.cover_url = cover
 
-        # 详情：作者/出版社/出版日期
-        detail_elem = item.xpath('.//p[@class="detail"]')
-        if detail_elem:
-            detail_text = "".join(detail_elem[0].itertext()).strip()
-            parts = [p.strip() for p in detail_text.split("/")]
-            if len(parts) >= 1:
-                record.authors = [self._clean_author(parts[0])]
-            if len(parts) >= 2:
-                record.publisher = parts[1]
-            if len(parts) >= 3:
-                date_str = parts[2]
-                record.published_date = self._normalize_date(date_str)
-
-        # 价格（可选）
-        price_elem = item.xpath('.//span[@class="search_now_price"]/text()')
-        if price_elem:
+        # Price
+        m = re.search(r'<span[^>]*class="search_now_price"[^>]*>(.*?)</span>', item_html)
+        if m:
             try:
-                price_text = price_elem[0].strip().replace("¥", "").replace("￥", "")
-                price_val = float(price_text)
-                if price_val > 0:
-                    record.identifiers["dd_price"] = str(price_val)
+                price = m.group(1).strip().replace("¥", "").replace("￥", "")
+                record.identifiers["dd_price"] = str(float(price))
             except (ValueError, TypeError):
                 pass
 
-        # 评分
-        star_elem = item.xpath('.//p[contains(@class,"search_star")]//span[@class="level"]')
-        if star_elem:
-            star_text = "".join(star_elem[0].itertext()).strip()
-            try:
-                # 当当评分通常是 0-5 星
-                record.rating = float(star_text)
-            except (ValueError, TypeError):
-                pass
-
-        # ISBN 从标题或详情中提取
-        isbn_match = ISBN_PATTERN.search(title)
-        if isbn_match:
-            record.isbn = canonical_isbn(isbn_match.group(1))
-        elif detail_elem:
-            detail_text = "".join(detail_elem[0].itertext())
-            isbn_match = ISBN_PATTERN.search(detail_text)
-            if isbn_match:
-                record.isbn = canonical_isbn(isbn_match.group(1))
-
-        # 语言推断（中文书名 → 中文）
-        if record.title and re.search(r'[\u4e00-\u9fff]', record.title):
+        # Language
+        if re.search(r'[\u4e00-\u9fff]', record.title):
             record.language = "中文"
-
-        record.raw_id = item_id
-        if item_id:
-            record.identifiers["dangdang_id"] = item_id
 
         return record
 
-    def _clean_author(self, author: str) -> str:
-        """清洗作者名称，去掉角色标注"""
-        return AUTHOR_CLEAN_PATTERN.sub("", author).strip()
+    def _fetch_product_detail(self, pid: str, record: BookRecord = None) -> Optional[BookRecord]:
+        """从产品详情页获取作者/出版社/ISBN"""
+        try:
+            url = f"https://product.dangdang.com/{pid}.html"
+            resp = requests.get(url, headers=DEFAULT_HEADERS,
+                               timeout=DANGDANG_TIMEOUT, proxies=NO_PROXY)
+            if resp.status_code != 200:
+                return record
 
-    def _normalize_date(self, date_str: str) -> str:
-        """标准化日期格式"""
-        return normalize_date(date_str)
+            html = resp.content.decode("gbk", errors="replace")
+
+            if record is None:
+                return None
+
+            # Author: from <a dd_name="作者">作者:<a>NAME</a>
+            m = re.search(r'dd_name="作者"[^>]*>作者[:\s]*<a[^>]*>([^<]+)</a>', html)
+            if m:
+                author = self._clean_author(m.group(1))
+                if author:
+                    record.authors = [author]
+
+            # Publisher: from meta description, stop at punctuation
+            m = re.search(r'出版社[：:]\s*([^；。，\s<]+(?:[^；。<]+出版社)?)', html)
+            if m:
+                pub = m.group(1).rstrip("。，,：:")
+                # Clean trailing fragments
+                pub = re.sub(r'[\.。]*最新.*$', '', pub).strip()
+                if pub:
+                    record.publisher = pub
+
+            # Publication date: from detail page 出版时间:2010年11月
+            m = re.search(r'出版时间[：:]\s*(\d{4})\s*[年/\-]?\s*(\d{1,2})?\s*月?', html)
+            if m:
+                year = m.group(1)
+                month = m.group(2) or "01"
+                record.published_date = f"{year}-{month.zfill(2)}-01"
+
+            # ISBN: try 国际标准书号 section
+            m = re.search(r'国际标准书号ISBN[：:]\s*([\d\-]{10,17})', html)
+            if m:
+                isbn = canonical_isbn(m.group(1))
+                if isbn and len(isbn) > 9:
+                    record.isbn = isbn
+
+            # ISBN: from detailed info area
+            m = re.search(r'ISBN[：:]\s*(\d[\d\-]+)', html)
+            if m:
+                isbn = canonical_isbn(m.group(1))
+                if isbn:
+                    record.isbn = isbn
+
+            return record
+        except Exception:
+            return record
+
+    @staticmethod
+    def _clean_title(title: str) -> str:
+        """清理当当标题：截断营销文案"""
+        # If Chinese colon present, truncate after first colon if followed by ads
+        if "：" in title:
+            parts = title.split("：", 1)
+            if len(parts) == 2:
+                # Check if second part looks like marketing
+                ads_kw = ["获奖", "代表作", "推荐", "畅销", "经典", "科幻基石", "雨果奖", "银河奖"]
+                if any(kw in parts[1][:20] for kw in ads_kw):
+                    return parts[0].strip()
+        return title
+
+    def _clean_author(self, author: str) -> str:
+        """清洗作者名称"""
+        return re.sub(r'[，,。.\s\u3000\u00a0]*(著|编|译|主编|校|校译|编著|编译|编撰|等|绘|摄影)\s*$', '', author).strip()
