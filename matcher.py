@@ -384,13 +384,20 @@ class BookMatcher:
         return result
 
     def _pick_title(self, records: List[BookRecord]) -> str:
-        """选最常见的标题"""
+        """选最常见的标题（出现次数多的优先，而非最长）"""
         titles = [r.title.strip() for r in records if r.title and r.title.strip()]
         if not titles:
             return ""
-        # 去重后选最长的
-        unique = list(set(titles))
-        return max(unique, key=len)
+        if len(titles) == 1:
+            return titles[0]
+        # 按出现次数降序，次数相同则选最短的（更可能是精简标题而非营销标题）
+        count_map = {}
+        for t in titles:
+            count_map[t] = count_map.get(t, 0) + 1
+        max_count = max(count_map.values())
+        best = [t for t, c in count_map.items() if c == max_count]
+        best.sort(key=len)
+        return best[0]
 
     def _pick_subtitle(self, records: List[BookRecord]) -> str:
         for r in records:
