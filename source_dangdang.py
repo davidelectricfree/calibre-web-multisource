@@ -19,6 +19,7 @@ DANGDANG_SEARCH_URL = "https://search.dangdang.com/"
 DANGDANG_PAGE_SIZE = 5
 DANGDANG_TIMEOUT = 10
 DANGDANG_DETAIL_WORKERS = 3
+DANGDANG_DETAIL_BUDGET = 4    # 详情抓取总超时（秒），不得超过搜索预算
 
 DEFAULT_HEADERS = {
     "User-Agent": (
@@ -92,22 +93,29 @@ class DangdangSource:
         if not basic_records:
             return []
 
-        # 并发获取详情页
+        # 并发获取详情页，但有时间预算
         enriched = []
         with ThreadPoolExecutor(max_workers=DANGDANG_DETAIL_WORKERS) as pool:
             futures = {
                 pool.submit(self._fetch_product_detail, pid, record): (pid, record)
                 for pid, record in basic_records
             }
-            for future in as_completed(futures):
-                pid, base_record = futures[future]
+            # 只等待预算时间内的结果，超时的跳过返回 basic
+            deadline = time.time() + DANGDANG_DETAIL_BUDGET
+            for future in futures:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    break
                 try:
-                    result = future.result(timeout=DANGDANG_TIMEOUT)
+                    result = future.result(timeout=remaining)
                     if result:
                         enriched.append(result)
                 except Exception:
-                    enriched.append(base_record)
+                    pass
 
+        # 添加未获取到详情的 basic records
+        enriched_pids = {r.raw_id for r in enriched}
+        enriched.extend([r for pid, r in basic_records if pid not in enriched_pids])
         return enriched
 
     def _parse_search_item(self, pid: str, item_html: str) -> Optional[BookRecord]:
