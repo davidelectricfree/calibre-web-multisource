@@ -250,8 +250,8 @@ class BookMatcher:
         # 源优先级：中文商业/社区源优先，其次权威书目和国际源
         source_priority = {
             "douban": 0,
-            "dangdang": 1,
-            "weread": 2,
+            "weread": 1,
+            "dangdang": 2,
             "shlibrary": 3,
             "openlibrary": 4,
             "googlebooks": 5,
