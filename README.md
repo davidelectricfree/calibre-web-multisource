@@ -1,13 +1,14 @@
 # Calibre-Web MultiSource 元数据聚合插件
 
-多源书籍元数据聚合插件，整合 **豆瓣 + 当当 + 微信读书 + Open Library + Google Books** 五个数据源，通过三层防错机制智能合并结果。
+多源书籍元数据聚合插件，整合 **豆瓣 + 当当 + 微信读书 + Open Library + Google Books + 上海图书馆** 六个数据源，通过三层防错机制智能合并结果。
 
 ## 当前状态
 
-性能优化 Phase 1/2/4/5 及架构复盘 P0-P2 已完成：
+性能优化 Phase 1/2/4/5 及架构复盘 P0-P2 已完成，NLC 替换为上海图书馆：
 - **P0**：修复 import os 缺失 + 搜索预算绕过 Bug + 12 项回归测试
 - **P1**：删除死代码 `SOURCE_TIMEOUT` + 源 timeout 健康检查
 - **P2**：统一代理策略为 TCP-only，`probe_best_proxy()` 由 `PROXY_DIAGNOSTIC_ENABLED` 控制
+- **NLC→上海图书馆**：替换为 VuFind API + HTML 表格解析，支持著者/出版社/ISBN/中图分类/内容提要/封面
 - 单元测试覆盖 28 项全部通过
 
 详细后续计划见 [ROADMAP.md](ROADMAP.md)。历史性能优化方案见 [docs/performance-optimization-plan.md](docs/performance-optimization-plan.md)。
@@ -42,7 +43,8 @@ cps/metadata_provider/douban/
 ├── source_weread.py        # 微信读书数据源（API + Bearer Token）
 ├── source_openlibrary.py   # Open Library 数据源（REST API）
 ├── source_googlebooks.py   # Google Books 数据源（REST API）
-├── source_nlc.py           # 国家图书馆数据源（默认禁用）
+├── source_shlibrary.py     # 上海图书馆数据源（VuFind API + HTML）
+├── source_nlc.py           # 国家图书馆数据源（已废弃，代码参考）
 ├── source_health.py        # 源熔断器（Phase 4）
 ├── clc_parser.py           # 中图分类号解析（可选）
 ├── data_wrapper.py         # CLC 数据（可选）
@@ -64,7 +66,7 @@ SOURCE_DOUBAN_ENABLED = True        # 豆瓣
 SOURCE_DANGDANG_ENABLED = True      # 当当
 SOURCE_WEREAD_ENABLED = True        # 微信读书（需 weread_apikey.txt）
 SOURCE_OPENLIBRARY_ENABLED = True   # Open Library
-SOURCE_NLC_ENABLED = False          # 国家图书馆（默认禁用，容器内不可达）
+SOURCE_SHLIBRARY_ENABLED = True     # 上海图书馆（VuFind，替代 NLC）
 
 # Google Books
 GOOGLE_BOOKS_AS_SOURCE = True       # 作为常规源参与书名搜索
@@ -107,7 +109,8 @@ ZH_SKIP_GOOGLEBOOKS = True          # 中文搜索跳过 Google Books
 | 微信读书 | 中文书籍评分、简介、封面 | 需 API Key，/book/info 偶有超时 | 启用 |
 | Open Library | 免费 REST API，国际化 | 中文书名搜索不支持，ISBN 级联可用 | 跳过（总返回 0） |
 | Google Books | 全球覆盖，ISBN 查询准确 | 需 API Key，中文覆盖有限 | 跳过（覆盖率低） |
-| 国家图书馆 | 权威中文书目，中图分类号 | OPAC 响应慢，默认禁用 | 可选 |
+| 上海图书馆 | VuFind REST API，权威中文书目，中图分类号、内容提要 | 无评分/封面 | 启用 |
+| 国家图书馆 | 中文书目 | 已不可达，已替换为上海图书馆 | 废弃 |
 
 ## 许可证
 
