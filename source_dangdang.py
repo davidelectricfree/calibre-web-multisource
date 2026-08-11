@@ -18,7 +18,7 @@ from .book_record import BookRecord, canonical_isbn
 DANGDANG_SEARCH_URL = "https://search.dangdang.com/"
 DANGDANG_PAGE_SIZE = 5
 DANGDANG_TIMEOUT = 10
-DANGDANG_DETAIL_WORKERS = 3
+DANGDANG_DETAIL_WORKERS = 5    # 全并行：与 PAGESIZE 匹配，一轮完成
 DANGDANG_DETAIL_BUDGET = 4    # 详情抓取总超时（秒），不得超过搜索预算
 
 DEFAULT_HEADERS = {
