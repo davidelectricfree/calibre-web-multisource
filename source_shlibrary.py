@@ -3,16 +3,18 @@ MultiSource - 上海图书馆（Shanghai Library）数据源
 通过 VuFind API (https://vufind.library.sh.cn) 查询中文书目元数据。
 
 两阶段：
-  1. API 搜索（/api/v1/search）获取记录 ID 列表
-  2. HTML 详情页（/Record/{id}）获取丰富元数据（出版社、ISBN、页数、CLC、内容提要）
+  1. API 搜索（/api/v1/search）获取记录 ID + 基本字段
+  2. HTML 详情页（/Record/{id}）提取所有元数据（表格字段优于 COinS）
 """
 import re
 import json
 import time
-from typing import List, Optional
+from typing import List, Optional, Dict
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from html import unescape
 
 import requests
+from urllib.parse import unquote
 
 from .book_record import BookRecord, canonical_isbn, normalize_date
 
@@ -21,9 +23,9 @@ from .book_record import BookRecord, canonical_isbn, normalize_date
 # ============================================================
 SHL_API_BASE = "https://vufind.library.sh.cn/api/v1"
 SHL_RECORD_BASE = "https://vufind.library.sh.cn/Record"
-SHL_TIMEOUT = 10            # 请求超时（秒）
-SHL_MAX_RESULTS = 10         # 搜索结果最多处理条数
-SHL_DETAIL_WORKERS = 3       # 详情并发数
+SHL_TIMEOUT = 10
+SHL_MAX_RESULTS = 10
+SHL_DETAIL_WORKERS = 3
 
 SHL_HEADERS = {
     "User-Agent": (
@@ -50,22 +52,20 @@ class ShanghaiLibrarySource:
     # ---- API 搜索 ----
 
     def _search_by_title(self, title: str) -> List[BookRecord]:
-        """书名搜索：API → 详情"""
-        record_ids = self._search_by_api("Title", title, SHL_MAX_RESULTS)
-        if not record_ids:
+        results = self._search_by_api("Title", title, SHL_MAX_RESULTS)
+        if not results:
             return []
-        return self._fetch_details_concurrent(record_ids)
+        return self._fetch_details_concurrent(results)
 
     def _search_by_isbn(self, isbn: str) -> List[BookRecord]:
-        """ISBN 搜索：API → 详情"""
-        record_ids = self._search_by_api("ISN", isbn, 3)
-        if not record_ids:
+        results = self._search_by_api("ISN", isbn, 3)
+        if not results:
             return []
-        return self._fetch_details_concurrent(record_ids)
+        return self._fetch_details_concurrent(results)
 
     def _search_by_api(self, search_type: str, query: str,
-                       limit: int) -> List[str]:
-        """调用 VuFind API 搜索，返回记录 ID 列表"""
+                       limit: int) -> List[dict]:
+        """调用 VuFind API 搜索，返回 [{id, title, authors, subjects, languages}, ...]"""
         params = {
             "lookfor": query,
             "type": search_type,
@@ -75,18 +75,40 @@ class ShanghaiLibrarySource:
         if not data:
             return []
 
-        records = data.get("records", [])
-        return [r["id"] for r in records if r.get("id")]
+        results = []
+        for r in data.get("records", []) or []:
+            if r.get("id"):
+                # Extract author names from API response
+                authors = []
+                primary = r.get("authors", {}).get("primary", {})
+                for name, info in primary.items():
+                    # Strip birth year suffix like " 1963-"
+                    clean_name = re.sub(r"\s+\d{4}-$", "", name).strip()
+                    authors.append(clean_name)
+
+                # Extract subjects (flat list)
+                api_subjects = []
+                for group in r.get("subjects", []) or []:
+                    api_subjects.extend(group)
+
+                results.append({
+                    "id": r["id"],
+                    "title": r.get("title", ""),
+                    "authors": authors,
+                    "api_subjects": api_subjects,
+                    "languages": r.get("languages", []),
+                })
+        return results
 
     # ---- 详情获取 ----
 
-    def _fetch_details_concurrent(self, record_ids: List[str]) -> List[BookRecord]:
-        """并发获取多个记录详情"""
+    def _fetch_details_concurrent(self, api_results: List[dict]) -> List[BookRecord]:
+        """并发获取多个记录详情，传递 API 基本字段"""
         results = []
         with ThreadPoolExecutor(max_workers=SHL_DETAIL_WORKERS) as pool:
             futures = {
-                pool.submit(self._fetch_record_detail, rid): rid
-                for rid in record_ids
+                pool.submit(self._fetch_record_detail, r): r
+                for r in api_results
             }
             for future in as_completed(futures):
                 try:
@@ -97,18 +119,18 @@ class ShanghaiLibrarySource:
                     continue
         return results
 
-    def _fetch_record_detail(self, record_id: str) -> Optional[BookRecord]:
+    def _fetch_record_detail(self, api_result: dict) -> Optional[BookRecord]:
         """获取单个记录详情页并解析"""
+        record_id = api_result["id"]
         url = f"{SHL_RECORD_BASE}/{record_id}"
         html = self._fetch_html(url)
         if not html:
             return None
-        return self._parse_html_detail(html, record_id)
+        return self._parse_html_detail(html, record_id, api_result)
 
     # ---- HTTP 请求 ----
 
     def _fetch_json(self, url: str, params: dict) -> Optional[dict]:
-        """HTTP GET → JSON（直连，国内网站）"""
         try:
             resp = requests.get(url, params=params, headers=SHL_HEADERS,
                                 timeout=SHL_TIMEOUT, verify=False)
@@ -119,7 +141,6 @@ class ShanghaiLibrarySource:
         return None
 
     def _fetch_html(self, url: str) -> Optional[str]:
-        """HTTP GET → HTML（直连，国内网站）"""
         try:
             resp = requests.get(url, headers=SHL_HEADERS,
                                 timeout=SHL_TIMEOUT, verify=False)
@@ -132,175 +153,176 @@ class ShanghaiLibrarySource:
 
     # ---- HTML 解析 ----
 
-    def _parse_html_detail(self, html: str, record_id: str) -> Optional[BookRecord]:
-        """解析详情页 HTML，提取元数据"""
-        # COinS 元数据（Publisher, Date, ISBN）
-        publisher, pub_date, coin_isbn = self._parse_coin_metadata(html)
+    def _parse_html_detail(self, html: str, record_id: str,
+                           api_result: dict) -> Optional[BookRecord]:
+        """从 HTML 表格提取所有元数据，API 字段作为 fallback"""
+        table = self._parse_all_table_fields(html)
 
-        # Table 字段（Pages, CLC, Description）
-        table_data = self._parse_table_fields(html)
-
-        # 从 API 搜索结果中提取的基本字段需要从 search 层传入
-        # 这里只解析详情页特有的字段
-        isbn = canonical_isbn(coin_isbn) if coin_isbn else ""
-
-        # 提取标题和作者（从 HTML 结构）
-        title = self._extract_tag(html, "property", "name", "babel_title") or ""
-        # 提取副标题
+        # Title: prefer table, fallback to API
+        title = table.get("title", "") or api_result.get("title", "")
+        # Split subtitle
         subtitle = ""
         if ":" in title or "：" in title:
             parts = re.split(r"[:：]", title, maxsplit=1)
-            title, subtitle = parts[0].strip(), parts[1].strip() if len(parts) > 1 else ""
+            title, subtitle = parts[0].strip(), (parts[1].strip() if len(parts) > 1 else "")
 
-        author = self._extract_tag(html, "property", "author") or ""
+        # Authors: prefer table 著者, fallback to API
+        table_authors = table.get("authors", [])
+        if table_authors:
+            authors = table_authors
+        else:
+            authors = api_result.get("authors", [])
 
-        # 提取封面 URL（内部图片服务：/Cover/Show?instanceId=UUID）
+        # ISBN
+        isbn_raw = table.get("isbn", "")
+        isbn = canonical_isbn(isbn_raw) if isbn_raw else ""
+
+        # Cover
         cover_url = self._extract_cover_url(html, record_id)
         if cover_url:
             cover_url = self._validate_cover_url(cover_url)
 
-        # 构建记录
+        # Subjects: merge table subjects + API subjects
+        tags = table.get("subjects", [])
+        api_subs = api_result.get("api_subjects", [])
+        for s in api_subs:
+            if s not in tags:
+                tags.append(s)
+
         record = BookRecord(
             source_id=self.SOURCE_ID,
             source_name=self.SOURCE_NAME,
             title=title,
             subtitle=subtitle,
-            authors=[a.strip() for a in author.split(";") if a.strip()] if author else [],
-            publisher=publisher,
-            published_date=normalize_date(pub_date) if pub_date else "",
+            authors=authors,
+            publisher=table.get("publisher", ""),
+            published_date=normalize_date(table.get("pub_date", "")) if table.get("pub_date") else "",
             isbn=isbn,
-            description=table_data.get("description", ""),
+            description=table.get("description", ""),
             cover_url=cover_url,
-            tags=table_data.get("subjects", []),
-            language=table_data.get("language", ""),
-            pages=table_data.get("pages", ""),
-            clc_code="",
+            tags=tags,
+            language=table.get("language", ""),
+            pages=table.get("pages", ""),
+            clc_code=table.get("clc", ""),
             url=f"{SHL_RECORD_BASE}/{record_id}",
             raw_id=isbn or record_id,
             identifiers={"shl_id": record_id},
         )
         return record
 
-    def _parse_coin_metadata(self, html: str) -> tuple:
-        """解析 COinS 元数据 → (publisher, pub_date, isbn)"""
-        publisher = ""
-        pub_date = ""
-        isbn = ""
-
-        match = re.search(r'<span\s+class="Z3988"[^>]*title="([^"]*)"', html)
-        if not match:
-            return publisher, pub_date, isbn
-
-        coin = match.group(1)
-        # URL 解码
-        from html import unescape
-        coin = unescape(unescape(coin))
-
-        params = {}
-        for part in coin.split("&"):
-            if "=" in part:
-                k, v = part.split("=", 1)
-                from urllib.parse import unquote
-                params[k] = unquote(v)
-
-        publisher = params.get("rft.pub", "")
-        pub_date = params.get("rft.date", "")
-        isbn = params.get("rft.isbn", "")
-
-        return publisher, pub_date, isbn
-
-    def _parse_table_fields(self, html: str) -> dict:
-        """解析 HTML table 中的字段。兼容中文和英文两种标签风格。"""
+    def _parse_all_table_fields(self, html: str) -> dict:
+        """解析 HTML 表格所有 th/td 对，兼容中英文标签。"""
         result = {
+            "title": "",
+            "authors": [],
+            "publisher": "",
+            "pub_date": "",
+            "isbn": "",
+            "clc": "",
             "description": "",
             "pages": "",
             "subjects": [],
             "language": "",
         }
 
+        # Extract all <th>/<td> pairs
+        pairs = re.findall(r"<th>(.*?)</th>\s*<td>(.*?)</td>", html, re.DOTALL)
+        raw_fields = {}
+        for th, td in pairs:
+            key = th.strip().rstrip(":")
+            value = re.sub(r"<[^>]+>", " ", td).strip()
+            value = re.sub(r"\s+", " ", value)
+            raw_fields[key] = value
+
+        def get_field(*keys):
+            for k in keys:
+                if k in raw_fields:
+                    return raw_fields[k]
+            return ""
+
+        # Author — 著者 (CN) / Authors (EN)
+        author_text = get_field("著者", "Authors", "著者:")
+        if author_text:
+            result["authors"] = self._parse_authors(author_text)
+
+        # Publisher
+        result["publisher"] = get_field("出版社", "Publisher", "Publisher Address")
+
+        # Publication date
+        result["pub_date"] = get_field("出版时间", "Publication Dates", "Published")
+
+        # ISBN
+        result["isbn"] = get_field("ISBN", "ISBN:")
+
+        # CLC
+        result["clc"] = get_field("中图法", "CLC", "CLC:")
+
         # Description — 附注 (CN) / Contents (EN)
-        for label in ("附注:", "Contents:"):
-            m = re.search(
-                rf"<th>{label}</th>\s*<td>\s*(.*?)\s*</td>", html, re.DOTALL)
-            if m:
-                desc = re.sub(r"<[^>]+>", " ", m.group(1))
-                desc = re.sub(r"\s+", " ", desc).strip()
-                if len(desc) > 10:
-                    result["description"] = desc
-                break
+        desc = get_field("附注", "Contents", "附注:")
+        if len(desc) > 10:
+            result["description"] = unescape(desc)
 
         # Pages — 载体形态 (CN) / Carrier Form (EN)
-        for label in ("载体形态:", "Carrier Form:"):
-            m = re.search(
-                rf"<th>{label}</th>\s*<td>\s*(.*?)\s*</td>", html, re.DOTALL)
+        cf = get_field("载体形态", "Carrier Form", "载体形态:")
+        if cf:
+            m = re.search(r"(\d+)\s*页", cf)
             if m:
-                cf = re.sub(r"<[^>]+>", " ", m.group(1)).strip()
-                page_match = re.search(r"(\d+)\s*页", cf)
-                if page_match:
-                    result["pages"] = page_match.group(1)
-                break
+                result["pages"] = m.group(1)
 
         # Subjects — 主题 (CN) / Subjects (EN)
-        for label in ("主题:", "Subjects:"):
-            m = re.search(
-                rf"<th>{label}</th>\s*<td>\s*(.*?)\s*</td>", html, re.DOTALL)
-            if m:
-                subj_html = m.group(1)
-                subjects = re.findall(r">\s*([^<]+)\s*<", subj_html)
-                result["subjects"] = [s.strip() for s in subjects if s.strip()]
-                break
+        subj_text = get_field("主题", "Subjects", "主题:")
+        if subj_text:
+            # Split on > (hierarchical separator, may appear as &gt;)
+            parts = re.split(r"\s*(?:&gt;|>|--)\s*", unescape(subj_text))
+            result["subjects"] = [p.strip() for p in parts if p.strip() and len(p.strip()) > 1]
 
         # Language — 语言 (CN) / Language (EN)
-        for label in ("语言:", "Language:"):
-            m = re.search(
-                rf"<th>{label}</th>\s*<td>\s*(.*?)\s*</td>", html, re.DOTALL)
-            if m:
-                lang = re.sub(r"<[^>]+>", "", m.group(1)).strip()
-                if lang.lower() in ("chi", "chinese", "中文"):
-                    result["language"] = "中文"
-                elif lang:
-                    result["language"] = lang
-                break
+        lang = get_field("语言", "Language", "语言:")
+        if lang and lang.lower() in ("chi", "chinese", "中文"):
+            result["language"] = "中文"
+        elif lang:
+            result["language"] = lang
+
+        # Title — 题名 (CN) / Title (EN) — from API primarily, but try table too
+        title = get_field("题名", "Title")
+        if title:
+            result["title"] = title
 
         return result
 
     @staticmethod
+    def _parse_authors(text: str) -> List[str]:
+        """解析著者字段：'胡良剑 (编); 丁晓东 (编); 孙晓君 (编)' → ['胡良剑', '丁晓东', '孙晓君']"""
+        # Split by semicolons (Chinese or English)
+        authors = []
+        for part in re.split(r"[;；]", text):
+            part = part.strip()
+            if not part:
+                continue
+            # Remove role suffixes in parentheses: (编), (著), (译), etc.
+            part = re.sub(r"\s*[（(][^)）]*[)）]", "", part).strip()
+            if part:
+                authors.append(part)
+        return authors
+
+    @staticmethod
     def _extract_cover_url(html: str, record_id: str) -> str:
-        """提取书籍封面图片 URL。
-        VuFind 内部图片服务格式: /Cover/Show?instanceId=UUID"""
         m = re.search(
-            r'<img[^>]*src="(/Cover/Show\?instanceId=[^"]*)"',
-            html
-        )
+            r'<img[^>]*src="(/Cover/Show\?instanceId=[^"]*)"', html)
         if m:
             return f"https://vufind.library.sh.cn{m.group(1)}"
         return ""
 
     def _validate_cover_url(self, cover_url: str) -> str:
-        """校验封面 URL：HEAD 请求验证状态码 + Content-Type + 大小 > 1KB。
-        不合法则返回空字符串，避免存无效/占位封面。"""
         try:
             resp = requests.head(cover_url, headers=SHL_HEADERS,
                                  timeout=SHL_TIMEOUT, verify=False)
             if resp.status_code != 200:
                 return ""
-            content_type = resp.headers.get("Content-Type", "")
-            if not content_type.startswith("image/"):
+            if not resp.headers.get("Content-Type", "").startswith("image/"):
                 return ""
-            content_length = resp.headers.get("Content-Length", "0")
-            if int(content_length) < 1024:
+            if int(resp.headers.get("Content-Length", "0")) < 1024:
                 return ""
             return cover_url
         except Exception:
             return ""
-
-    @staticmethod
-    def _extract_tag(html: str, attr: str, value: str,
-                     extra_attr: str = "") -> str:
-        """提取 HTML meta 或 span 标签的属性值"""
-        if extra_attr:
-            pattern = rf'<[^>]+\b{attr}="{value}"[^>]*\b{extra_attr}="([^"]*)"'
-        else:
-            pattern = rf'<[^>]+\b{attr}="{value}"[^>]*content="([^"]*)"'
-        m = re.search(pattern, html)
-        return m.group(1) if m else ""
