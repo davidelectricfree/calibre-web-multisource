@@ -63,9 +63,9 @@ class DangdangSource:
             return []
 
     def _parse_search_results(self, html: str) -> List[BookRecord]:
-        """解析搜索结果 li.line1 容器"""
+        """解析搜索结果 li.lineN 容器"""
         products = re.findall(
-            r'<li[^>]*class="line1"[^>]*id="p(\d+)"[^>]*>(.*?)</li>',
+            r'<li[^>]*class="line\d+"[^>]*id="p(\d+)"[^>]*>(.*?)</li>',
             html, re.DOTALL
         )
         if not products:
